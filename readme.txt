@@ -58,12 +58,23 @@ Change History
 	* Set the working directory of the sample to ..\..\..\bin (project properties --> debug --> working dir)
   * Set the environment variables CINDER_DIR and BOOST_DIR to the according directories in your windows system, 
     or change the include and lib paths manually in the project settings to fullfill your needs
+
+2) Features
+-----------
+  * plays video and images of various formats
+  * common player functions (play, pause, stop, open, seek)
+  * set speed, loopmode (noloop, loop, loop bidirectional)
+  * seek to specific frame
+  * test sample to easily drag and drop files to play them and edit their settings with gui
   
-2) Todos
+3) Know Issues
+--------------
+  * files which consist not just of I-frames make problems playing backward, working on improvement but this will never be fully solvable (performance)
+  
+4) Todos
 --------
   * improve seeking for some files formats (find alternatives to forward decoding for unseekable files)
   * audio integration and syncing
-  * check how to play images, the decoding so far did't work so I ignore them
   * playing from URL
   * Encoder
   * set primary audio/video stream
@@ -73,3 +84,7 @@ Change History
   * better encapsulation ,shared_ptrs, ...
   * cross platform
   
+5) Support
+----------
+please direct questions to 
+support@cadet.at
