@@ -108,6 +108,7 @@ namespace _2RealFFmpegWrapper
 		bool			seekFrame(long lFrameNumber);
 		bool			seekTime(double dTimeInMs);
 		bool			decodeFrame();
+		bool			decodeImage();
 		void			retrieveVideoInfo();
 		long			calculateFrameNumberFromTime(long lTime);
 		double			mod(double a, double b);
@@ -139,5 +140,6 @@ namespace _2RealFFmpegWrapper
 		int					m_iLoopMode;					// 0 .. once, 1 .. loop normal, 2 .. loop bidirectional, default is loop
 		int					m_iState;
 		bool				m_bIsFileOpen;
+		bool				m_bIsImageDecoded;
 	};
 };

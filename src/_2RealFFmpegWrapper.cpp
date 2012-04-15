@@ -64,13 +64,15 @@ extern "C" {
 namespace _2RealFFmpegWrapper
 {
 
-FFmpegWrapper::FFmpegWrapper() : m_bIsFileOpen(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),	m_pSwScalingContext(nullptr), m_pFrame(nullptr), m_pFrameRGB(nullptr), m_pVideoBuffer(nullptr)
+FFmpegWrapper::FFmpegWrapper() : m_bIsFileOpen(false), m_bIsImageDecoded(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),
+	m_pSwScalingContext(nullptr), m_pFrame(nullptr), m_pFrameRGB(nullptr), m_pVideoBuffer(nullptr)
 {
 	init();
 }
 
 
-FFmpegWrapper::FFmpegWrapper(std::string strFileName) : m_bIsFileOpen(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),	m_pSwScalingContext(nullptr), m_pFrame(nullptr), m_pFrameRGB(nullptr), m_pVideoBuffer(nullptr)
+FFmpegWrapper::FFmpegWrapper(std::string strFileName) : m_bIsFileOpen(false), m_bIsImageDecoded(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),
+	m_pSwScalingContext(nullptr), m_pFrame(nullptr), m_pFrameRGB(nullptr), m_pVideoBuffer(nullptr)
 {
 	init();
 	open(strFileName);
@@ -100,6 +102,7 @@ bool FFmpegWrapper::open(std::string strFileName)
 	m_iDirection = eForward;
 	m_iState = eStopped;
 	m_strFileName = strFileName;
+	m_bIsImageDecoded = false;
 
 	if(m_bIsFileOpen)
 	{
@@ -157,10 +160,6 @@ bool FFmpegWrapper::open(std::string strFileName)
 		   return false;
 
 		retrieveVideoInfo();
-
-		// check if image, for which the decoding doesn't work, but somehow I guess it should anyway for now skip images
-		if(m_iBitrate==0)
-			return false;
 
 		// Determine required buffer size and allocate buffer
 		//int numBytes=avpicture_get_size(PIX_FMT_RGB24, m_iWidth, m_iHeight); // there is a bug currently in the newest ffmpeg, so let's calc size manually
@@ -290,6 +289,17 @@ unsigned char* FFmpegWrapper::getFrame()
 	if(m_dCurrentTimeInMs<0)
 		m_dTargetTimeInMs = 0;
 
+	// if image decode it and return
+	if(m_lDurationInFrames==0)
+	{
+		if(!m_bIsImageDecoded)
+		{
+			decodeImage();
+			m_bIsImageDecoded = true;	// don't decode again it's a still so I would just wastes performance
+		}
+		return m_pFrameRGB->data[0];
+	}
+
 	long lTargetFrame = calculateFrameNumberFromTime(m_dTargetTimeInMs);
 	if(lTargetFrame != m_lCurrentFrameNumber)
 	{
@@ -383,6 +393,41 @@ bool FFmpegWrapper::decodeFrame()
 		av_free_packet(&packet);
 	}
 	return bRet;
+}
+
+bool FFmpegWrapper::decodeImage()
+{
+	int isFrameDecoded=-1;
+
+	AVPacket packet;
+	// alloc img buffer
+	FILE *imgFile = fopen(m_strFileName.c_str(),"rb");
+	fseek(imgFile,0,SEEK_END);
+	long imgFileSize = ftell(imgFile);
+	fseek(imgFile,0,SEEK_SET);
+	void *imgBuffer = malloc(imgFileSize);
+	fread(imgBuffer,1,imgFileSize,imgFile);
+	fclose(imgFile);
+	packet.data = (uint8_t*)imgBuffer;
+	packet.size = imgFileSize;
+	av_init_packet(&packet);
+	//decode image
+	avcodec_decode_video2(m_pCodecContext, m_pFrame, &isFrameDecoded, &packet);
+
+	if(isFrameDecoded)	// Did we get a video frame? 
+	{
+		//Convert YUV->RGB
+		sws_scale(m_pSwScalingContext, m_pFrame->data, m_pFrame->linesize, 0,m_iHeight, m_pFrameRGB->data, m_pFrameRGB->linesize);
+		av_free_packet(&packet);
+		free(imgBuffer);			// we have to free this buffer separately don't ask me why, otherwise leak
+		return true;
+	}
+	else
+	{
+		free(imgBuffer);
+	    av_free_packet(&packet);
+		return false;
+	}
 }
 
 bool FFmpegWrapper::seekFrame(long lTargetFrameNumber)
