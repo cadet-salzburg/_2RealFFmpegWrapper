@@ -90,9 +90,14 @@ void cinderFFmpegApp::setup()
 	setupGui();
 	gl::enableAlphaBlending();
 
-	m_Players.push_back(std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper(".\\data\\morph.avi")));
-	m_Players.back()->play();
-	m_Players.back()->dumpFFmpegInfo();
+	std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> testFile = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
+	testFile->dumpFFmpegInfo();
+	if(testFile->open(".\\data\\morph.avi"))
+	{
+		m_Players.push_back(testFile);
+		m_Players.back()->play();
+	}
+
 	m_dLastTime = 0;
 	m_iCurrentVideo = 0;
 	m_fSpeed = 1;
@@ -179,8 +184,25 @@ void cinderFFmpegApp::open()
 	fs::path moviePath = getOpenFilePath();
 	if( ! moviePath.empty() )
 	{
-		m_Players.push_back( std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper(moviePath.string())));
-		m_Players.back()->play();
+		std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> fileToLoad = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
+		if(fileToLoad->open(moviePath.string()))
+		{
+			m_Players.push_back(fileToLoad);
+			m_Players.back()->play();
+		}
+	}
+}
+
+void cinderFFmpegApp::fileDrop( FileDropEvent event )
+{
+	for(int i=0; i<event.getFiles().size(); i++)
+	{
+		std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> fileToLoad = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
+		if(fileToLoad->open(event.getFile(i).string()))
+		{
+			m_Players.push_back(fileToLoad);
+			m_Players.back()->play();
+		}
 	}
 }
 
@@ -249,7 +271,7 @@ void cinderFFmpegApp::updateGui()
 void cinderFFmpegApp::setupGui()
 {
 	std::stringstream strTmp;
-	m_Gui = ci::params::InterfaceGl("FFmpeg Player", ci::Vec2i(300,400));
+	m_Gui = ci::params::InterfaceGl("FFmpeg Player", ci::Vec2i(300,340));
 
 	// Video / Audio Infos
 	m_Gui.addButton( "open", std::bind( &cinderFFmpegApp::open, this ) );
@@ -287,15 +309,6 @@ void cinderFFmpegApp::setupGui()
 	m_Gui.addParam("speed", &m_fSpeed, "min=0 max=8.0 step=0.05");
 	m_Gui.addParam("0..none, 1..loop, 2..loopBidi", &m_iLoopMode, "min=0 max=2 step=1");
 	m_Gui.addParam("seek frame", &m_fSeekPos, "min=0.0 max=1.0 step=0.01");
-}
-
-void cinderFFmpegApp::fileDrop( FileDropEvent event )
-{
-	for(int i=0; i<event.getFiles().size(); i++)
-	{
-		m_Players.push_back( std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper(event.getFile(i).string())));
-		m_Players.back()->play();
-	}
 }
 
 int	cinderFFmpegApp::calcTileDivisor(int size)

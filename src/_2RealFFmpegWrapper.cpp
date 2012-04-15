@@ -110,11 +110,11 @@ bool FFmpegWrapper::open(std::string strFileName)
 	// Open video file
 	m_pFormatContext = avformat_alloc_context();
 	if(avformat_open_input(&m_pFormatContext, strFileName.c_str(), NULL, NULL)!=0)
-	   m_bIsFileOpen = false; // couldn't open file
+	   return false; // couldn't open file
 
 	// Retrieve stream information
 	if(av_find_stream_info(m_pFormatContext)<0)
-		m_bIsFileOpen = false; // couldn't find stream information
+		return false; // couldn't find stream information
 
 	// Find the first video stream
 	m_iVideoStream = m_iAudioStream = -1;
@@ -157,6 +157,10 @@ bool FFmpegWrapper::open(std::string strFileName)
 		   return false;
 
 		retrieveVideoInfo();
+
+		// check if image, for which the decoding doesn't work, but somehow I guess it should anyway for now skip images
+		if(m_iBitrate==0)
+			return false;
 
 		// Determine required buffer size and allocate buffer
 		//int numBytes=avpicture_get_size(PIX_FMT_RGB24, m_iWidth, m_iHeight); // there is a bug currently in the newest ffmpeg, so let's calc size manually
