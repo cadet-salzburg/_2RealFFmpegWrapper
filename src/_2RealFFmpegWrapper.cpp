@@ -90,7 +90,7 @@ bool FFmpegWrapper::init()
 	 return true;
 }
 
-bool FFmpegWrapper::open(std::string strFileName)
+bool FFmpegWrapper::open(std::string strFileName, bool bPreLoad)
 {
 	// init property variables
 	m_iWidth = m_iHeight = 0;
@@ -103,6 +103,8 @@ bool FFmpegWrapper::open(std::string strFileName)
 	m_iState = eStopped;
 	m_strFileName = strFileName;
 	m_bIsImageDecoded = false;
+	m_bPreLoad = bPreLoad;
+	m_lFramePosInPreLoadedFile = 0;
 
 	if(m_bIsFileOpen)
 	{
@@ -174,6 +176,14 @@ bool FFmpegWrapper::open(std::string strFileName)
 	}
 	m_bIsFileOpen = true;
 	m_strFileName = strFileName;
+
+	if(m_bPreLoad)
+	{
+		if(preLoad()<=0)	// no frame loaded
+		{
+			return false;
+		}
+	}
 	return m_bIsFileOpen;
 }
 
@@ -340,6 +350,7 @@ unsigned char* FFmpegWrapper::getFrame()
 		m_lCurrentFrameNumber = lTargetFrame;
 		m_dCurrentTimeInMs = m_dTargetTimeInMs;
 	}
+	
 	return m_pFrameRGB->data[0];	// return old decoded when decoding didn't work, otherwise this buffer holds the new image
 }
 
@@ -366,20 +377,63 @@ void FFmpegWrapper::setPosition(float fPos)
 	m_dTargetTimeInMs = (fPos * m_dDurationInMs);
 }
 
+int	FFmpegWrapper::preLoad()
+{
+	int frames=0;
+	m_vFileBuffer.clear();
+	m_vFileBuffer.push_back(new AVPacket());
+	while(av_read_frame(m_pFormatContext, m_vFileBuffer.back())>=0) 
+	{
+		frames++;
+		m_vFileBuffer.push_back(new AVPacket());
+	}
+
+	if(frames<=0)
+		m_vFileBuffer.clear();	// just clear vector, nothing else was allocated
+
+	return frames;
+}
+
+AVPacket* FFmpegWrapper::fetchAVPacket()
+{
+	AVPacket *pAVPacket = nullptr;
+	if(m_bPreLoad)
+	{
+		if(m_vFileBuffer[m_lFramePosInPreLoadedFile])
+		{
+			pAVPacket = m_vFileBuffer[m_lFramePosInPreLoadedFile];
+			m_lFramePosInPreLoadedFile = m_lFramePosInPreLoadedFile % (m_vFileBuffer.size() - 1);
+			return m_vFileBuffer[m_lFramePosInPreLoadedFile++];
+		}
+		else
+			return nullptr;
+	}
+	else
+	{
+		pAVPacket= new AVPacket();
+		if(av_read_frame(m_pFormatContext, pAVPacket)>=0)
+			return pAVPacket;
+		else 
+			return nullptr;
+	}
+}
+
 bool FFmpegWrapper::decodeFrame()
 {
-	int isFrameDecoded;
-	AVPacket packet;
 	bool bRet = false;
-
-	if(av_read_frame(m_pFormatContext, &packet)>=0) 
+	int isFrameDecoded;
+	AVPacket* pAVPacket = fetchAVPacket();
+	
+	if(pAVPacket!=nullptr)
 	{
 		// Is this a packet from the video stream?
-		if(packet.stream_index == m_iVideoStream) 
+		if(pAVPacket->stream_index == m_iVideoStream) 
 		{
 			// Decode video frame
-			avcodec_decode_video2(m_pCodecContext, m_pFrame, &isFrameDecoded, &packet);
-    
+			int iBytes = avcodec_decode_video2(m_pCodecContext, m_pFrame, &isFrameDecoded, pAVPacket);
+			/*if(!isFrameDecoded && iBytes>0)
+				fetchAVPacket();*/
+
 			// Did we get a video frame?
 			if(isFrameDecoded) 
 			{
@@ -389,8 +443,9 @@ bool FFmpegWrapper::decodeFrame()
 			}
 		}
     
-		// Free the packet that was allocated by av_read_frame
-		av_free_packet(&packet);
+		// Free the packet that was allocated by av_read_frame, if not in preLoad mode
+		if(!m_bPreLoad)
+			av_free_packet(pAVPacket);
 	}
 	return bRet;
 }
@@ -555,16 +610,28 @@ bool FFmpegWrapper::hasAudio()
 	return m_bIsFileOpen && m_iAudioStream >= 0;
 }
 
+bool FFmpegWrapper::isNewFrame()
+{
+	// make sure always to decode 0 frame first, even if the first delta time would suggest differently
+	if(m_dCurrentTimeInMs<0)
+		m_dTargetTimeInMs = 0;
+	long lTargetFrame = calculateFrameNumberFromTime(m_dTargetTimeInMs);
+	return (lTargetFrame != m_lCurrentFrameNumber);
+}
+
 void FFmpegWrapper::retrieveVideoInfo()
 {
 	m_iWidth = m_pCodecContext->width;
 	m_iHeight = m_pCodecContext->height;
 	m_iBitrate = m_pFormatContext->bit_rate / 1000.0;
 	m_dDurationInMs = m_pFormatContext->duration * 1000.0 / (float)AV_TIME_BASE;
-	m_lDurationInFrames = m_pFormatContext->streams[m_iVideoStream]->nb_frames; 
 	m_fFps = (float)m_pCodecContext->time_base.den * (1.0 / (float)m_pCodecContext->time_base.num);
 	if(m_fFps>100)
 		m_fFps = 1.0 /((m_dDurationInMs / (float)m_lDurationInFrames) / 1000.0);
+
+	//m_lDurationInFrames = m_pFormatContext->streams[m_iVideoStream]->nb_frames;		// for some codec this return wrong numbers so calc from time
+	m_lDurationInFrames = calculateFrameNumberFromTime(m_dDurationInMs);
+	
 	//if(m_pFormatContext->streams[m_iVideoStream]->nb_frames == 0)	// couldn't retrieve it from metainfo so calc from time duration
 	//	m_lDurationInFrames = (float)m_dDurationInMs / 1000.0 / (1.0 / m_fFps); 
 

@@ -48,12 +48,14 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 // forward declarations
 struct AVFormatContext;
 struct AVCodecContext;
 struct SwsContext;
 struct AVFrame;
+struct AVPacket;
 
 namespace _2RealFFmpegWrapper
 {
@@ -71,7 +73,7 @@ namespace _2RealFFmpegWrapper
 
 		bool init();
 		void update(double dElapsedTimeInMs);
-		bool open(std::string strFileName);
+		bool open(std::string strFileName, bool bPreLoad=false);
 		void close();
 		void play();
 		void stop();
@@ -102,6 +104,7 @@ namespace _2RealFFmpegWrapper
 		void			setSpeed(float fSpeed);		// multiplier, no negative values, direction is setDirection
 		bool			hasVideo();
 		bool			hasAudio();
+		bool			isNewFrame();
 		void			dumpFFmpegInfo();
 
 	private:
@@ -109,37 +112,42 @@ namespace _2RealFFmpegWrapper
 		bool			seekTime(double dTimeInMs);
 		bool			decodeFrame();
 		bool			decodeImage();
+		AVPacket*		fetchAVPacket();
+		int				preLoad();
 		void			retrieveVideoInfo();
 		long			calculateFrameNumberFromTime(long lTime);
 		double			mod(double a, double b);
 
-		AVFormatContext*	m_pFormatContext;
-		AVCodecContext*		m_pCodecContext;
-		SwsContext*			m_pSwScalingContext;
-		AVFrame*			m_pFrame;
-		AVFrame*			m_pFrameRGB;
-		std::string			m_strFileName;	
-		std::string			m_strCodecName;
-		unsigned char*		m_pVideoBuffer;
-		double				m_dCurrentTimeInMs;
-		double				m_dTargetTimeInMs;
-		double				m_dDurationInMs;
-		float               m_fFps;
-		float				m_fSpeedMultiplier;			// default 1.0, no negative values
-		unsigned long		m_lDurationInFrames;			// length in frames of file, or if cueIn and out are set frames between this range 
-		long				m_lCurrentFrameNumber;		// current framePosition ( if cue positions are set e.g. startCueFrame = 10, currentframe at absolute pos 10 is set to 0 (range between 10 and 500 --> current frame 0 .. 490)
-		unsigned long		m_lCueInFrameNumber;   // default = 0
-		unsigned long		m_lCueOutFrameNumber;  // default = maxNrOfFrames (end of file)
-		int					m_iVideoStream;
-		int					m_iAudioStream;
-		int					m_iContentType;				// 0 .. video with audio, 1 .. just video, 2 .. just audio, 3 .. image	// 2RealEnumeration
-		int					m_iWidth;
-		int					m_iHeight;
-		int					m_iBitrate;
-		int					m_iDirection;
-		int					m_iLoopMode;					// 0 .. once, 1 .. loop normal, 2 .. loop bidirectional, default is loop
-		int					m_iState;
-		bool				m_bIsFileOpen;
-		bool				m_bIsImageDecoded;
+		AVFormatContext*		m_pFormatContext;
+		AVCodecContext*			m_pCodecContext;
+		SwsContext*				m_pSwScalingContext;
+		AVFrame*				m_pFrame;
+		AVFrame*				m_pFrameRGB;
+		std::vector<AVPacket*>	m_vFileBuffer;		// stores all frames of a file
+		std::string				m_strFileName;	
+		std::string				m_strCodecName;
+		unsigned char*			m_pVideoBuffer;
+		double					m_dCurrentTimeInMs;
+		double					m_dTargetTimeInMs;
+		double					m_dDurationInMs;
+		float					m_fFps;
+		float					m_fSpeedMultiplier;			// default 1.0, no negative values
+		unsigned long			m_lDurationInFrames;			// length in frames of file, or if cueIn and out are set frames between this range 
+		long					m_lCurrentFrameNumber;		// current framePosition ( if cue positions are set e.g. startCueFrame = 10, currentframe at absolute pos 10 is set to 0 (range between 10 and 500 --> current frame 0 .. 490)
+		unsigned long			m_lFramePosInPreLoadedFile;
+		unsigned long			m_lCueInFrameNumber;   // default = 0
+		unsigned long			m_lCueOutFrameNumber;  // default = maxNrOfFrames (end of file)
+		int						m_iVideoStream;
+		int						m_iAudioStream;
+		int						m_iContentType;				// 0 .. video with audio, 1 .. just video, 2 .. just audio, 3 .. image	// 2RealEnumeration
+		int						m_iWidth;
+		int						m_iHeight;
+		int						m_iBitrate;
+		int						m_iDirection;
+		int						m_iLoopMode;					// 0 .. once, 1 .. loop normal, 2 .. loop bidirectional, default is loop
+		int						m_iState;
+		bool					m_bIsFileOpen;
+		bool					m_bIsImageDecoded;
+		bool					m_bPreLoad;
 	};
 };

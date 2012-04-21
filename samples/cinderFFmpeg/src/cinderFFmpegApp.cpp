@@ -60,6 +60,7 @@ private:
 	int  calcSelectedPlayer(int x, int y);
 	
 	std::vector<std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> >		m_Players;
+	std::vector<ci::gl::Texture>											m_VideoTextures;
 	ci::params::InterfaceGl													m_Gui;
 	ci::Font																m_Font;
 	int																		m_iCurrentVideo;
@@ -71,6 +72,7 @@ private:
 	int																		m_iTilesDivisor;
 	int																		m_iTileWidth;
 	int																		m_iTileHeight;
+	bool																	m_bPreLoad;
 };
 
 void cinderFFmpegApp::prepareSettings(Settings* settings)
@@ -95,6 +97,7 @@ void cinderFFmpegApp::setup()
 	if(testFile->open(".\\data\\morph.avi"))
 	{
 		m_Players.push_back(testFile);
+		m_VideoTextures.push_back(gl::Texture());
 		m_Players.back()->play();
 	}
 
@@ -104,6 +107,7 @@ void cinderFFmpegApp::setup()
 	m_iLoopMode = _2RealFFmpegWrapper::eLoop;
 	m_iTilesDivisor = 1;
 	m_fSeekPos = m_fOldSeekPos = 0;
+	m_bPreLoad = false;
 }
 
 void cinderFFmpegApp::update()
@@ -149,20 +153,21 @@ void cinderFFmpegApp::draw()
 
 	for(int i=0; i<m_Players.size(); i++)
 	{
-		if(m_Players[i]->hasVideo())
+		if(m_Players[i]->hasVideo() && m_Players[i]->isNewFrame())
 		{	
 			unsigned char* pImg = m_Players[i]->getFrame();
 			if(pImg != nullptr)
 			{		
-				posX = (i % m_iTilesDivisor) * m_iTileWidth;
-				posY = ((int(float(i) / float(m_iTilesDivisor))) % m_iTilesDivisor) * m_iTileHeight;
-
-				Rectf imgRect = Rectf(posX, posY, posX + m_iTileWidth, posY + m_iTileHeight);
-				ci::gl::draw(ci::gl::Texture( ci::Surface(pImg, m_Players[i]->getWidth(), m_Players[i]->getHeight(), m_Players[i]->getWidth() * 3, ci::SurfaceChannelOrder::RGB) ), imgRect);
+				
+				m_VideoTextures[i] = gl::Texture(ci::Surface(pImg, m_Players[i]->getWidth(), m_Players[i]->getHeight(), m_Players[i]->getWidth() * 3, ci::SurfaceChannelOrder::RGB) );
 			}
 		}
+		posX = (i % m_iTilesDivisor) * m_iTileWidth;
+		posY = ((int(float(i) / float(m_iTilesDivisor))) % m_iTilesDivisor) * m_iTileHeight;
+		Rectf imgRect = Rectf(posX, posY, posX + m_iTileWidth, posY + m_iTileHeight);
+		ci::gl::draw( m_VideoTextures[i] , imgRect);
 	}
-
+	
 	// draw green selection frame
 	if(m_Players.size()>0)
 	{
@@ -185,9 +190,10 @@ void cinderFFmpegApp::open()
 	if( ! moviePath.empty() )
 	{
 		std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> fileToLoad = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
-		if(fileToLoad->open(moviePath.string()))
+		if(fileToLoad->open(moviePath.string(), m_bPreLoad))
 		{
 			m_Players.push_back(fileToLoad);
+			m_VideoTextures.push_back(gl::Texture());
 			m_Players.back()->play();
 		}
 	}
@@ -198,9 +204,10 @@ void cinderFFmpegApp::fileDrop( FileDropEvent event )
 	for(int i=0; i<event.getFiles().size(); i++)
 	{
 		std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> fileToLoad = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
-		if(fileToLoad->open(event.getFile(i).string()))
+		if(fileToLoad->open(event.getFile(i).string(), m_bPreLoad))
 		{
 			m_Players.push_back(fileToLoad);
+			m_VideoTextures.push_back(gl::Texture());
 			m_Players.back()->play();
 		}
 	}
@@ -209,6 +216,7 @@ void cinderFFmpegApp::fileDrop( FileDropEvent event )
 void cinderFFmpegApp::clearAll()
 {
 	m_Players.clear();
+	m_VideoTextures.clear();
 }
 
 void cinderFFmpegApp::pause()
@@ -275,6 +283,7 @@ void cinderFFmpegApp::setupGui()
 
 	// Video / Audio Infos
 	m_Gui.addButton( "open", std::bind( &cinderFFmpegApp::open, this ) );
+	m_Gui.addParam( "pre load", &m_bPreLoad);
 	m_Gui.addButton( "clear all", std::bind( &cinderFFmpegApp::clearAll, this ) );
 
 	m_Gui.addSeparator();
@@ -341,6 +350,7 @@ int	cinderFFmpegApp::calcTileDivisor(int size)
 		{
 			m_iCurrentVideo = selected;
 			m_Players.erase(m_Players.begin() + selected);		
+			m_VideoTextures.erase(m_VideoTextures.begin() + selected);		
 			if(m_iCurrentVideo>=m_Players.size())
 				m_iCurrentVideo = m_Players.size() - 1;
 			if(m_iCurrentVideo<=0)
