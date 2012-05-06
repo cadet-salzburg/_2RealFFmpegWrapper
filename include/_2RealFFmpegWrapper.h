@@ -49,6 +49,8 @@
 
 #include <string>
 #include <vector>
+#include <boost/chrono.hpp>
+#include <boost/thread.hpp>
 
 // forward declarations
 struct AVFormatContext;
@@ -60,7 +62,7 @@ struct AVPacket;
 namespace _2RealFFmpegWrapper
 {
 	enum {eNoLoop, eLoop, eLoopBidi};
-	enum {eOpened, ePlaying, ePaused, eStopped, eError};
+	enum {eOpened, ePlaying, ePaused, eStopped, eEof, eError};
 	enum {eForward=1, eBackward=-1};
 	enum {eMajorVersion=0, eMinorVersion=1, ePatchVersion=0}; 
 
@@ -72,8 +74,7 @@ namespace _2RealFFmpegWrapper
 		virtual ~FFmpegWrapper();
 
 		bool init();
-		void update(double dElapsedTimeInMs);
-		bool open(std::string strFileName, bool bPreLoad=false);
+		bool open(std::string strFileName);
 		void close();
 		void play();
 		void stop();
@@ -104,17 +105,26 @@ namespace _2RealFFmpegWrapper
 		void			setSpeed(float fSpeed);		// multiplier, no negative values, direction is setDirection
 		bool			hasVideo();
 		bool			hasAudio();
+		bool			isImage();
 		bool			isNewFrame();
 		void			dumpFFmpegInfo();
 
 	private:
+		
+		bool			openVideoStream();
+		bool			openAudioStream();
+		void			threadedPlayer();
 		bool			seekFrame(long lFrameNumber);
 		bool			seekTime(double dTimeInMs);
 		bool			decodeFrame();
+		bool			decodeVideoFrame(AVPacket* pAVPacket);
+		bool			decodeAudioFrame(AVPacket* pAVPacket);
 		bool			decodeImage();
 		AVPacket*		fetchAVPacket();
 		int				preLoad();
 		void			retrieveVideoInfo();
+		void			update();
+		double			getDeltaTime();
 		long			calculateFrameNumberFromTime(long lTime);
 		double			mod(double a, double b);
 
@@ -147,7 +157,10 @@ namespace _2RealFFmpegWrapper
 		int						m_iLoopMode;					// 0 .. once, 1 .. loop normal, 2 .. loop bidirectional, default is loop
 		int						m_iState;
 		bool					m_bIsFileOpen;
-		bool					m_bIsImageDecoded;
-		bool					m_bPreLoad;
+		bool					m_bIsThreadRunning;
+		boost::thread			m_PlayerThread;
+		boost::mutex			m_Mutex;
+	    boost::chrono::system_clock::time_point m_OldTime;
+		bool					isFrameDecoded;
 	};
 };

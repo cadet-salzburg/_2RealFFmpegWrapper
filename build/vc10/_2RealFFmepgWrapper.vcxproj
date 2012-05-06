@@ -53,7 +53,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\..\external\ffmpeg\include;..\..\include;..\..\src</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\external\ffmpeg\include;..\..\include;..\..\src;$(BOOST_DIR)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <CompileAsManaged>false</CompileAsManaged>
     </ClCompile>
@@ -78,7 +78,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\..\external\ffmpeg\include;..\..\include;..\..\src</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\external\ffmpeg\include;..\..\include;..\..\src;$(BOOST_DIR)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>

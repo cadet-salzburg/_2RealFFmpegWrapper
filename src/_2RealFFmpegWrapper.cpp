@@ -64,14 +64,14 @@ extern "C" {
 namespace _2RealFFmpegWrapper
 {
 
-FFmpegWrapper::FFmpegWrapper() : m_bIsFileOpen(false), m_bIsImageDecoded(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),
+FFmpegWrapper::FFmpegWrapper() : m_bIsFileOpen(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),
 	m_pSwScalingContext(nullptr), m_pFrame(nullptr), m_pFrameRGB(nullptr), m_pVideoBuffer(nullptr)
 {
 	init();
 }
 
 
-FFmpegWrapper::FFmpegWrapper(std::string strFileName) : m_bIsFileOpen(false), m_bIsImageDecoded(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),
+FFmpegWrapper::FFmpegWrapper(std::string strFileName) : m_bIsFileOpen(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),
 	m_pSwScalingContext(nullptr), m_pFrame(nullptr), m_pFrameRGB(nullptr), m_pVideoBuffer(nullptr)
 {
 	init();
@@ -87,10 +87,11 @@ bool FFmpegWrapper::init()
 {
 	 avcodec_register_all();	// think this line is redundant but other samples use it, so better leave it
 	 av_register_all();
+	 m_bIsThreadRunning = false;
 	 return true;
 }
 
-bool FFmpegWrapper::open(std::string strFileName, bool bPreLoad)
+bool FFmpegWrapper::open(std::string strFileName)
 {
 	// init property variables
 	m_iWidth = m_iHeight = 0;
@@ -102,8 +103,6 @@ bool FFmpegWrapper::open(std::string strFileName, bool bPreLoad)
 	m_iDirection = eForward;
 	m_iState = eStopped;
 	m_strFileName = strFileName;
-	m_bIsImageDecoded = false;
-	m_bPreLoad = bPreLoad;
 	m_lFramePosInPreLoadedFile = 0;
 
 	if(m_bIsFileOpen)
@@ -135,60 +134,87 @@ bool FFmpegWrapper::open(std::string strFileName, bool bPreLoad)
        }
 	}
 
-	if(m_iVideoStream==-1 && m_iAudioStream==-1)
+	if(!(hasVideo() || hasAudio()))
        return false; // Didn't find video or audio stream
 
-	if(m_iVideoStream>=0)
+	if(hasVideo())
 	{
-	    // Get a pointer to the codec context for the video stream
-		m_pCodecContext = m_pFormatContext->streams[m_iVideoStream]->codec;
-
-		// Find the decoder for the video stream
-		AVCodec* pCodec = avcodec_find_decoder(m_pCodecContext->codec_id);	// guess this is deleted with the avcodec_close, that's what the docs say
-		if(pCodec==NULL)
-		   return false; // Codec not found
-
-		// Open codec
-		AVDictionary* options;	
-		if(avcodec_open2(m_pCodecContext, pCodec, nullptr)<0)
-		   return false; // Could not open codec
-
-		// Allocate video frame
-		m_pFrame = avcodec_alloc_frame();
-
-		// Allocate an AVFrame structure
-		m_pFrameRGB=avcodec_alloc_frame();
-		if(m_pFrameRGB==nullptr)
-		   return false;
-
-		retrieveVideoInfo();
-
-		// Determine required buffer size and allocate buffer
-		//int numBytes=avpicture_get_size(PIX_FMT_RGB24, m_iWidth, m_iHeight); // there is a bug currently in the newest ffmpeg, so let's calc size manually
-		m_pVideoBuffer=new uint8_t[m_iWidth * m_iHeight * 3];
-
-
-		// Assign appropriate parts of buffer to image planes in pFrameRGB
-		avpicture_fill((AVPicture*)m_pFrameRGB, m_pVideoBuffer, PIX_FMT_RGB24,m_iWidth,m_iHeight);
-
-		//Initialize Context
-		m_pSwScalingContext = sws_getContext(m_pCodecContext->width,m_iHeight, m_pCodecContext->pix_fmt,m_iWidth,m_iHeight, PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
+		if(!openVideoStream())
+			return false;
 	}
+
+	if(hasAudio())
+	{
+		if(!openAudioStream())
+			return false;
+	}
+
 	m_bIsFileOpen = true;
 	m_strFileName = strFileName;
 
-	if(m_bPreLoad)
+	// content is image, just decode once don't start update thread
+	if(isImage())
 	{
-		if(preLoad()<=0)	// no frame loaded
-		{
-			return false;
-		}
+		m_dDurationInMs = 0;
+		m_fFps = 0;
+		m_lCurrentFrameNumber = 1;
+		decodeImage();
 	}
+
+	// start timer
+	m_OldTime = boost::chrono::system_clock::now();
+
 	return m_bIsFileOpen;
+}
+
+bool FFmpegWrapper::openVideoStream()
+{
+	// Get a pointer to the codec context for the video stream
+	m_pCodecContext = m_pFormatContext->streams[m_iVideoStream]->codec;
+
+	// Find the decoder for the video stream
+	AVCodec* pCodec = avcodec_find_decoder(m_pCodecContext->codec_id);	// guess this is deleted with the avcodec_close, that's what the docs say
+	if(pCodec==NULL)
+		return false; // Codec not found
+
+	// Open codec
+	AVDictionary* options;	
+	if(avcodec_open2(m_pCodecContext, pCodec, nullptr)<0)
+		return false; // Could not open codec
+
+	// Allocate video frame
+	m_pFrame = avcodec_alloc_frame();
+
+	// Allocate an AVFrame structure
+	m_pFrameRGB=avcodec_alloc_frame();
+	if(m_pFrameRGB==nullptr)
+		return false;
+
+	retrieveVideoInfo();
+
+	// Determine required buffer size and allocate buffer
+	//int numBytes=avpicture_get_size(PIX_FMT_RGB24, m_iWidth, m_iHeight); // there is a bug currently in the newest ffmpeg, so let's calc size manually
+	m_pVideoBuffer=new uint8_t[m_iWidth * m_iHeight * 3];
+
+
+	// Assign appropriate parts of buffer to image planes in pFrameRGB
+	avpicture_fill((AVPicture*)m_pFrameRGB, m_pVideoBuffer, PIX_FMT_RGB24,m_iWidth,m_iHeight);
+
+	//Initialize Context
+	m_pSwScalingContext = sws_getContext(m_pCodecContext->width,m_iHeight, m_pCodecContext->pix_fmt,m_iWidth,m_iHeight, PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
+
+	return true;
+}
+
+bool FFmpegWrapper::openAudioStream()
+{
+	return true;
 }
 
 void FFmpegWrapper::close()
 {
+	stop();
+
 	// Free the RGB image
 	if(m_pVideoBuffer!=nullptr)
 	{
@@ -231,29 +257,31 @@ void FFmpegWrapper::close()
 	}
 }
 
-void FFmpegWrapper::update(double dElapsedTimeInMs)
+void FFmpegWrapper::update()
 {
 	// todo check for very big over and underflow
+	double deltaTime = getDeltaTime();
 	if(m_iState == ePlaying)
 	{
-		m_dTargetTimeInMs += dElapsedTimeInMs * m_fSpeedMultiplier * m_iDirection;
+		m_dTargetTimeInMs +=  deltaTime * m_fSpeedMultiplier * m_iDirection;
 
 		// check for over underflows and correct according to loop mode and set according state
-		if(m_dTargetTimeInMs >= m_dDurationInMs || m_dTargetTimeInMs < 0)
+		if(m_dTargetTimeInMs > m_dDurationInMs || m_dTargetTimeInMs < 0)
 		{
 			if(m_iLoopMode == eNoLoop)
 			{
-				stop();
+				pause();
 			}
 			else if(m_iLoopMode == eLoop)
 			{
+				seekFrame(0);
 				if(m_dTargetTimeInMs < 0) // underflow
 				{
-					m_dTargetTimeInMs = m_dDurationInMs + m_dTargetTimeInMs;	
+					m_dTargetTimeInMs = m_dDurationInMs;	
 				}
 				else // overflow
 				{
-					m_dTargetTimeInMs = mod(m_dTargetTimeInMs, m_dDurationInMs);
+					m_dTargetTimeInMs = 0;
 				}
 			}
 			else if(m_iLoopMode == eLoopBidi)
@@ -275,7 +303,15 @@ void FFmpegWrapper::update(double dElapsedTimeInMs)
 
 void FFmpegWrapper::play()
 {
-	m_iState = ePlaying;
+	if(!isImage())
+	{
+		m_iState = ePlaying;
+		if(!m_bIsThreadRunning)
+		{
+			m_bIsThreadRunning = true;
+			m_PlayerThread = boost::thread(&FFmpegWrapper::threadedPlayer, this);
+		}
+	}
 }
 
 void FFmpegWrapper::pause()
@@ -285,73 +321,74 @@ void FFmpegWrapper::pause()
 
 void FFmpegWrapper::stop()
 {
+	if(m_bIsThreadRunning)
+	{
+		m_bIsThreadRunning = false;
+		m_PlayerThread.join();
+	}
 	m_lCurrentFrameNumber = -1;	// set to invalid, as it is not decoded yet
 	m_dTargetTimeInMs = 0;
 	m_iState = eStopped;
+	if(m_bIsFileOpen)
+		seekFrame(0);	// so unseekable files get reset too
 }
 
 unsigned char* FFmpegWrapper::getFrame()
 {
-	bool isFrameDecoded = false;
+	return m_pFrameRGB->data[0];
+}
+
+void FFmpegWrapper::threadedPlayer()
+{
+	isFrameDecoded = false;
 	static bool bIsSeekable = true;
 
-	// make sure always to decode 0 frame first, even if the first delta time would suggest differently
-	if(m_dCurrentTimeInMs<0)
-		m_dTargetTimeInMs = 0;
-
-	// if image decode it and return
-	if(m_lDurationInFrames==0)
+	while(m_bIsThreadRunning)
 	{
-		if(!m_bIsImageDecoded)
-		{
-			decodeImage();
-			m_bIsImageDecoded = true;	// don't decode again it's a still so I would just wastes performance
-		}
-		return m_pFrameRGB->data[0];
-	}
+		// update timer for correct video sync to fps
+		update();
 
-	long lTargetFrame = calculateFrameNumberFromTime(m_dTargetTimeInMs);
-	if(lTargetFrame != m_lCurrentFrameNumber)
-	{
-		// probe to jump to target frame directly
-		if(bIsSeekable)
+		// make sure always to decode 0 frame first, even if the first delta time would suggest differently
+		if(m_dCurrentTimeInMs<0)
+			m_dTargetTimeInMs = 0;
+
+		long lTargetFrame = calculateFrameNumberFromTime(m_dTargetTimeInMs);
+		if(lTargetFrame != m_lCurrentFrameNumber)
 		{
-			seekFrame(lTargetFrame);
-			isFrameDecoded = decodeFrame();
-			if(!isFrameDecoded)
-			{
-				seekFrame(0);
-				bIsSeekable = false;
-			}
-		}
+			// probe to jump to target frame directly
 			
-		if(!bIsSeekable)	// just forward decoding, this is a huge performance issue when playing backwards
-		{
-			if(lTargetFrame<m_lCurrentFrameNumber)
+			if(bIsSeekable)
 			{
-				seekFrame(0);
-				m_lCurrentFrameNumber = m_dCurrentTimeInMs = 0;
-			}
-
-			while(!isFrameDecoded)
-			{
+				bIsSeekable = seekFrame(lTargetFrame);
 				isFrameDecoded = decodeFrame();
-				m_lCurrentFrameNumber++;
-				if(m_lCurrentFrameNumber+1>=m_lDurationInFrames)
+				if(!isFrameDecoded)
 				{
-					seekFrame(0);
-					isFrameDecoded = decodeFrame();
-					m_lCurrentFrameNumber = lTargetFrame = 0;
+				/*	seekFrame(0);
+					bIsSeekable = false;*/
 				}
 			}
-			m_dTargetTimeInMs = (float)(lTargetFrame) * 1.0 / m_fFps * 1000.0;
-		}
+			
+			if(!bIsSeekable)	// just forward decoding, this is a huge performance issue when playing backwards
+			{
+				/*if(lTargetFrame<=0)
+				{
+					seekFrame(0);
+					m_lCurrentFrameNumber = m_dCurrentTimeInMs = 0;
+				}*/
 
-		m_lCurrentFrameNumber = lTargetFrame;
-		m_dCurrentTimeInMs = m_dTargetTimeInMs;
+				if( m_iState == ePlaying)
+				{
+					isFrameDecoded = decodeFrame();
+					m_dTargetTimeInMs = (float)(lTargetFrame) * 1.0 / m_fFps * 1000.0;
+					
+				}
+			}
+
+			m_lCurrentFrameNumber = lTargetFrame;
+			m_dCurrentTimeInMs = m_dTargetTimeInMs;
+		}
+		
 	}
-	
-	return m_pFrameRGB->data[0];	// return old decoded when decoding didn't work, otherwise this buffer holds the new image
 }
 
 void FFmpegWrapper::setFramePosition(long lTargetFrameNumber)
@@ -377,77 +414,67 @@ void FFmpegWrapper::setPosition(float fPos)
 	m_dTargetTimeInMs = (fPos * m_dDurationInMs);
 }
 
-int	FFmpegWrapper::preLoad()
-{
-	int frames=0;
-	m_vFileBuffer.clear();
-	m_vFileBuffer.push_back(new AVPacket());
-	while(av_read_frame(m_pFormatContext, m_vFileBuffer.back())>=0) 
-	{
-		frames++;
-		m_vFileBuffer.push_back(new AVPacket());
-	}
-
-	if(frames<=0)
-		m_vFileBuffer.clear();	// just clear vector, nothing else was allocated
-
-	return frames;
-}
-
 AVPacket* FFmpegWrapper::fetchAVPacket()
 {
 	AVPacket *pAVPacket = nullptr;
-	if(m_bPreLoad)
-	{
-		if(m_vFileBuffer[m_lFramePosInPreLoadedFile])
-		{
-			pAVPacket = m_vFileBuffer[m_lFramePosInPreLoadedFile];
-			m_lFramePosInPreLoadedFile = m_lFramePosInPreLoadedFile % (m_vFileBuffer.size() - 1);
-			return m_vFileBuffer[m_lFramePosInPreLoadedFile++];
-		}
-		else
-			return nullptr;
-	}
-	else
-	{
-		pAVPacket= new AVPacket();
-		if(av_read_frame(m_pFormatContext, pAVPacket)>=0)
-			return pAVPacket;
-		else 
-			return nullptr;
-	}
+
+	pAVPacket = new AVPacket();
+	if(av_read_frame(m_pFormatContext, pAVPacket)>=0)
+		return pAVPacket;
+	else 
+		return nullptr;
 }
 
 bool FFmpegWrapper::decodeFrame()
 {
 	bool bRet = false;
-	int isFrameDecoded;
-	AVPacket* pAVPacket = fetchAVPacket();
 	
-	if(pAVPacket!=nullptr)
+	for(int i=0; i<m_pFormatContext->nb_streams; i++)
 	{
-		// Is this a packet from the video stream?
-		if(pAVPacket->stream_index == m_iVideoStream) 
-		{
-			// Decode video frame
-			int iBytes = avcodec_decode_video2(m_pCodecContext, m_pFrame, &isFrameDecoded, pAVPacket);
-			/*if(!isFrameDecoded && iBytes>0)
-				fetchAVPacket();*/
+		AVPacket* pAVPacket = fetchAVPacket();
 
-			// Did we get a video frame?
-			if(isFrameDecoded) 
+		if(pAVPacket!=nullptr)
+		{
+			// Is this a packet from the video stream?
+			if(pAVPacket->stream_index == m_iVideoStream) 
 			{
-				//Convert YUV->RGB
-				sws_scale(m_pSwScalingContext, m_pFrame->data, m_pFrame->linesize, 0,m_iHeight, m_pFrameRGB->data, m_pFrameRGB->linesize);
-				bRet = true;
+				bRet = decodeVideoFrame(pAVPacket);
 			}
-		}
+			else if(pAVPacket->stream_index == m_iAudioStream)
+			{
+				bRet = decodeAudioFrame(pAVPacket);
+			}
     
-		// Free the packet that was allocated by av_read_frame, if not in preLoad mode
-		if(!m_bPreLoad)
 			av_free_packet(pAVPacket);
+
+			if(!bRet)
+				return false;
+		}
 	}
-	return bRet;
+	return true;
+}
+
+bool FFmpegWrapper::decodeVideoFrame(AVPacket* pAVPacket)
+{
+	int isFrameDecoded=0;
+
+	// Decode video frame
+	if(avcodec_decode_video2(m_pCodecContext, m_pFrame, &isFrameDecoded, pAVPacket)<0)
+		return false;
+			
+	// Did we get a video frame?
+	if(isFrameDecoded) 
+	{
+		//Convert YUV->RGB
+		sws_scale(m_pSwScalingContext, m_pFrame->data, m_pFrame->linesize, 0, m_iHeight, m_pFrameRGB->data, m_pFrameRGB->linesize);
+		return true;
+	}
+	return false;
+}
+
+bool FFmpegWrapper::decodeAudioFrame(AVPacket* pAVPacket)
+{
+	return true;
 }
 
 bool FFmpegWrapper::decodeImage()
@@ -493,6 +520,7 @@ bool FFmpegWrapper::seekFrame(long lTargetFrameNumber)
 	
 	if(avformat_seek_file(m_pFormatContext, m_iVideoStream, lTargetFrameNumber, lTargetFrameNumber, lTargetFrameNumber, AVSEEK_FLAG_FRAME | AVSEEK_FLAG_ANY | AVSEEK_FLAG_BACKWARD) < 0)
 	{
+		avcodec_flush_buffers(m_pCodecContext);
 		return false;
 	}
 	avcodec_flush_buffers(m_pCodecContext);
@@ -602,19 +630,17 @@ std::string FFmpegWrapper::getFileName()
 
 bool FFmpegWrapper::hasVideo()
 {
-	return m_bIsFileOpen && m_iVideoStream >= 0;
+	return m_iVideoStream >= 0;
 }
 		
 bool FFmpegWrapper::hasAudio()
 {
-	return m_bIsFileOpen && m_iAudioStream >= 0;
+	return m_iAudioStream >= 0;
 }
 
 bool FFmpegWrapper::isNewFrame()
 {
-	// make sure always to decode 0 frame first, even if the first delta time would suggest differently
-	if(m_dCurrentTimeInMs<0)
-		m_dTargetTimeInMs = 0;
+	update();
 	long lTargetFrame = calculateFrameNumberFromTime(m_dTargetTimeInMs);
 	return (lTargetFrame != m_lCurrentFrameNumber);
 }
@@ -628,7 +654,7 @@ void FFmpegWrapper::retrieveVideoInfo()
 	m_fFps = (float)m_pCodecContext->time_base.den * (1.0 / (float)m_pCodecContext->time_base.num);
 	if(m_fFps>100)
 		m_fFps = 1.0 /((m_dDurationInMs / (float)m_lDurationInFrames) / 1000.0);
-
+	
 	//m_lDurationInFrames = m_pFormatContext->streams[m_iVideoStream]->nb_frames;		// for some codec this return wrong numbers so calc from time
 	m_lDurationInFrames = calculateFrameNumberFromTime(m_dDurationInMs);
 	
@@ -648,9 +674,17 @@ void FFmpegWrapper::dumpFFmpegInfo()
 	std::cout << "AVFormat configuration: " << avformat_configuration() << std::endl << std::endl;
 }
 
+double FFmpegWrapper::getDeltaTime()
+{
+	boost::chrono::system_clock::time_point newTime = boost::chrono::system_clock::now();
+	boost::chrono::duration<double> delta = newTime - m_OldTime; 
+	m_OldTime = newTime;
+	return delta.count() * 1000.0;
+}
+
 long FFmpegWrapper::calculateFrameNumberFromTime(long lTime)
 {
-	//av_rescale(lTimeInMs,m_pFormatContext->streams[m_iVideoStream]->time_base.den,m_pFormatContext->streams[m_iVideoStream]->time_base.num) / 1000;
+	//long lTargetFrame = av_rescale(lTime,m_pFormatContext->streams[m_iVideoStream]->time_base.den,m_pFormatContext->streams[m_iVideoStream]->time_base.num) / 1000.0;
 	long lTargetFrame = floor((double)lTime/1000.0 * m_fFps);
 	return lTargetFrame;
 }
@@ -659,6 +693,11 @@ double FFmpegWrapper::mod(double a, double b)
 {
 	int result = static_cast<int>( a / b );
 	return a - static_cast<double>( result ) * b;
+}
+
+bool FFmpegWrapper::isImage()
+{
+	return m_iBitrate<=0;
 }
 
 };

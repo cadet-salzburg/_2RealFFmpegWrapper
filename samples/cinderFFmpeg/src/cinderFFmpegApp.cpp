@@ -72,7 +72,6 @@ private:
 	int																		m_iTilesDivisor;
 	int																		m_iTileWidth;
 	int																		m_iTileHeight;
-	bool																	m_bPreLoad;
 };
 
 void cinderFFmpegApp::prepareSettings(Settings* settings)
@@ -95,6 +94,7 @@ void cinderFFmpegApp::setup()
 	std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> testFile = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
 	testFile->dumpFFmpegInfo();
 	if(testFile->open(".\\data\\morph.avi"))
+	//if(testFile->open("d:\\vjing\\houska\\Vj-CLips\\Sequenz 02_2.avi"))
 	{
 		m_Players.push_back(testFile);
 		m_VideoTextures.push_back(gl::Texture());
@@ -107,7 +107,6 @@ void cinderFFmpegApp::setup()
 	m_iLoopMode = _2RealFFmpegWrapper::eLoop;
 	m_iTilesDivisor = 1;
 	m_fSeekPos = m_fOldSeekPos = 0;
-	m_bPreLoad = false;
 }
 
 void cinderFFmpegApp::update()
@@ -119,15 +118,6 @@ void cinderFFmpegApp::update()
 	m_Players[m_iCurrentVideo]->setSpeed(m_fSpeed);
 	m_Players[m_iCurrentVideo]->setLoopMode(m_iLoopMode);
 	
-	// update the frame calculation
-	double dElapsedTime = app::getElapsedSeconds() * 1000.0; 
-	long lDeltaTime = long(dElapsedTime - m_dLastTime);
-	m_dLastTime = dElapsedTime;
-
-	for(int i=0; i<m_Players.size(); i++)
-	{
-		m_Players[i]->update(lDeltaTime);
-	}
 	updateGui();
 
 	// scrubbing through stream
@@ -153,12 +143,11 @@ void cinderFFmpegApp::draw()
 
 	for(int i=0; i<m_Players.size(); i++)
 	{
-		if(m_Players[i]->hasVideo() && m_Players[i]->isNewFrame())
+		if(m_Players[i]->hasVideo()) //&& m_Players[i]->isNewFrame())
 		{	
 			unsigned char* pImg = m_Players[i]->getFrame();
 			if(pImg != nullptr)
 			{		
-				
 				m_VideoTextures[i] = gl::Texture(ci::Surface(pImg, m_Players[i]->getWidth(), m_Players[i]->getHeight(), m_Players[i]->getWidth() * 3, ci::SurfaceChannelOrder::RGB) );
 			}
 		}
@@ -190,7 +179,7 @@ void cinderFFmpegApp::open()
 	if( ! moviePath.empty() )
 	{
 		std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> fileToLoad = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
-		if(fileToLoad->open(moviePath.string(), m_bPreLoad))
+		if(fileToLoad->open(moviePath.string()))
 		{
 			m_Players.push_back(fileToLoad);
 			m_VideoTextures.push_back(gl::Texture());
@@ -204,7 +193,7 @@ void cinderFFmpegApp::fileDrop( FileDropEvent event )
 	for(int i=0; i<event.getFiles().size(); i++)
 	{
 		std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> fileToLoad = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
-		if(fileToLoad->open(event.getFile(i).string(), m_bPreLoad))
+		if(fileToLoad->open(event.getFile(i).string()))
 		{
 			m_Players.push_back(fileToLoad);
 			m_VideoTextures.push_back(gl::Texture());
@@ -283,7 +272,6 @@ void cinderFFmpegApp::setupGui()
 
 	// Video / Audio Infos
 	m_Gui.addButton( "open", std::bind( &cinderFFmpegApp::open, this ) );
-	m_Gui.addParam( "pre load", &m_bPreLoad);
 	m_Gui.addButton( "clear all", std::bind( &cinderFFmpegApp::clearAll, this ) );
 
 	m_Gui.addSeparator();
