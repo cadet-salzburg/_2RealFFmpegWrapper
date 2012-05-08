@@ -22,7 +22,6 @@
 	Authors: Robert Praxmarer
 	Web: http://www.1n0ut.com
 	Email: support@cadet.at
-	Created: 16-04-2011
 
 	This wrapper uses FFmpeg, and is credited as follows:
 */
@@ -58,6 +57,7 @@ struct AVCodecContext;
 struct SwsContext;
 struct AVFrame;
 struct AVPacket;
+struct AVRational;
 
 namespace _2RealFFmpegWrapper
 {
@@ -65,6 +65,14 @@ namespace _2RealFFmpegWrapper
 	enum {eOpened, ePlaying, ePaused, eStopped, eEof, eError};
 	enum {eForward=1, eBackward=-1};
 	enum {eMajorVersion=0, eMinorVersion=1, ePatchVersion=0}; 
+
+	typedef struct AudioData
+	{
+		int						m_iAudioSampleRate;
+		int						m_iAudioChannels;
+		long					m_lSize;
+		unsigned char*			m_pData;
+	} AudioData;
 
 	class FFmpegWrapper
 	{
@@ -80,15 +88,16 @@ namespace _2RealFFmpegWrapper
 		void stop();
 		void pause();
 
-		unsigned char*	getFrame();
+		unsigned char*	getVideoFrame();
+		AudioData		getAudioData();
 		void			setFramePosition(long lTargetFrameNumber);
 		void			setTimePositionInMs(double dTargetTimeInMs);
 		void		    setPosition(float fPos);	// between 0 .. 1 for begin and end of stream
-		unsigned char*	getAudio();
-		unsigned char*	getAudio(int iFrame);
 		unsigned int	getWidth();
 		unsigned int	getHeight();
 		int				getState();
+		int				getAudioChannels();
+		int				getAudioSampleRate();
 		float			getFps();
 		float			getSpeed();
 		int				getBitrate();
@@ -99,7 +108,8 @@ namespace _2RealFFmpegWrapper
 		int				getDirection();
 		void			setDirection(int iDirection);
 		int				getLoopMode();
-		std::string		getCodecName();
+		std::string		getVideoCodecName();
+		std::string		getAudioCodecName();
 		std::string		getFileName();
 		void			setLoopMode(int iMode);
 		void			setSpeed(float fSpeed);		// multiplier, no negative values, direction is setDirection
@@ -110,7 +120,7 @@ namespace _2RealFFmpegWrapper
 		void			dumpFFmpegInfo();
 
 	private:
-		
+		void			initPropertyVariables();
 		bool			openVideoStream();
 		bool			openAudioStream();
 		void			threadedPlayer();
@@ -121,26 +131,33 @@ namespace _2RealFFmpegWrapper
 		bool			decodeAudioFrame(AVPacket* pAVPacket);
 		bool			decodeImage();
 		AVPacket*		fetchAVPacket();
-		int				preLoad();
+		void			retrieveFileInfo();
 		void			retrieveVideoInfo();
+		void			retrieveAudioInfo();
 		void			update();
 		double			getDeltaTime();
 		long			calculateFrameNumberFromTime(long lTime);
 		double			mod(double a, double b);
+		double			r2d(AVRational r);
 
 		AVFormatContext*		m_pFormatContext;
-		AVCodecContext*			m_pCodecContext;
+		AVCodecContext*			m_pVideoCodecContext;
+		AVCodecContext*			m_pAudioCodecContext;
 		SwsContext*				m_pSwScalingContext;
-		AVFrame*				m_pFrame;
-		AVFrame*				m_pFrameRGB;
+		AVFrame*				m_pVideoFrame;
+		AVFrame*				m_pVideoFrameRGB;
+		AVFrame*				m_pAudioFrame;
+		AudioData				m_AudioData;
+
 		std::vector<AVPacket*>	m_vFileBuffer;		// stores all frames of a file
 		std::string				m_strFileName;	
-		std::string				m_strCodecName;
+		std::string				m_strVideoCodecName;
+		std::string				m_strAudioCodecName;
 		unsigned char*			m_pVideoBuffer;
 		double					m_dCurrentTimeInMs;
 		double					m_dTargetTimeInMs;
 		double					m_dDurationInMs;
-		float					m_fFps;
+		double					m_dFps;
 		float					m_fSpeedMultiplier;			// default 1.0, no negative values
 		unsigned long			m_lDurationInFrames;			// length in frames of file, or if cueIn and out are set frames between this range 
 		long					m_lCurrentFrameNumber;		// current framePosition ( if cue positions are set e.g. startCueFrame = 10, currentframe at absolute pos 10 is set to 0 (range between 10 and 500 --> current frame 0 .. 490)
@@ -156,6 +173,7 @@ namespace _2RealFFmpegWrapper
 		int						m_iDirection;
 		int						m_iLoopMode;					// 0 .. once, 1 .. loop normal, 2 .. loop bidirectional, default is loop
 		int						m_iState;
+		bool					m_bIsInitialized;
 		bool					m_bIsFileOpen;
 		bool					m_bIsThreadRunning;
 		boost::thread			m_PlayerThread;

@@ -22,7 +22,6 @@
 	Authors: Robert Praxmarer
 	Web: http://www.1n0ut.com
 	Email: support@cadet.at
-	Created: 16-04-2011
 
 	This sample uses LibCinder and _2RealFFmpegWwrapper, and of course FFmpeg
 */
@@ -32,6 +31,8 @@
 // cinder
 #include "cinder/app/AppBasic.h"
 #include "cinder/gl/Texture.h"
+#include "cinder/audio/Output.h"
+#include "cinder/audio/Callback.h"
 #include "cinder/params/Params.h"
 #include "cinder/Utilities.h"
 
@@ -58,7 +59,8 @@ private:
 	void toggleDirection();
 	int	 calcTileDivisor(int size);
 	int  calcSelectedPlayer(int x, int y);
-	
+	void audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer32f *ioBuffer );
+
 	std::vector<std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> >		m_Players;
 	std::vector<ci::gl::Texture>											m_VideoTextures;
 	ci::params::InterfaceGl													m_Gui;
@@ -93,8 +95,8 @@ void cinderFFmpegApp::setup()
 
 	std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> testFile = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
 	testFile->dumpFFmpegInfo();
-	if(testFile->open(".\\data\\morph.avi"))
-	//if(testFile->open("d:\\vjing\\houska\\Vj-CLips\\Sequenz 02_2.avi"))
+	//if(testFile->open(".\\data\\morph.avi"))
+	if(testFile->open("d:\\vjing\\houska\\sounds\\tada.wav"))
 	{
 		m_Players.push_back(testFile);
 		m_VideoTextures.push_back(gl::Texture());
@@ -107,6 +109,8 @@ void cinderFFmpegApp::setup()
 	m_iLoopMode = _2RealFFmpegWrapper::eLoop;
 	m_iTilesDivisor = 1;
 	m_fSeekPos = m_fOldSeekPos = 0;
+
+	audio::Output::play( audio::createCallback( this, &cinderFFmpegApp::audioCallback ) );
 }
 
 void cinderFFmpegApp::update()
@@ -145,7 +149,7 @@ void cinderFFmpegApp::draw()
 	{
 		if(m_Players[i]->hasVideo()) //&& m_Players[i]->isNewFrame())
 		{	
-			unsigned char* pImg = m_Players[i]->getFrame();
+			unsigned char* pImg = m_Players[i]->getVideoFrame();
 			if(pImg != nullptr)
 			{		
 				m_VideoTextures[i] = gl::Texture(ci::Surface(pImg, m_Players[i]->getWidth(), m_Players[i]->getHeight(), m_Players[i]->getWidth() * 3, ci::SurfaceChannelOrder::RGB) );
@@ -154,7 +158,8 @@ void cinderFFmpegApp::draw()
 		posX = (i % m_iTilesDivisor) * m_iTileWidth;
 		posY = ((int(float(i) / float(m_iTilesDivisor))) % m_iTilesDivisor) * m_iTileHeight;
 		Rectf imgRect = Rectf(posX, posY, posX + m_iTileWidth, posY + m_iTileHeight);
-		ci::gl::draw( m_VideoTextures[i] , imgRect);
+		if(m_VideoTextures[i])
+			ci::gl::draw( m_VideoTextures[i] , imgRect);
 	}
 	
 	// draw green selection frame
@@ -243,8 +248,11 @@ void cinderFFmpegApp::updateGui()
 	strTmp << "label='time:  " << m_Players[m_iCurrentVideo]->getCurrentTimeInMs() << ":" << m_Players[m_iCurrentVideo]->getDurationInMs() << "'";
 	m_Gui.setOptions( "time", strTmp.str() );
 	strTmp.clear();	strTmp.str("");
-	strTmp << "label='video codec: " << m_Players[m_iCurrentVideo]->getCodecName() << "'";
-	m_Gui.setOptions("codec", strTmp.str());
+	strTmp << "label='video codec: " << m_Players[m_iCurrentVideo]->getVideoCodecName() << "'";
+	m_Gui.setOptions("video codec", strTmp.str());
+	strTmp.clear();	strTmp.str("");
+	strTmp << "label='audio codec: " << m_Players[m_iCurrentVideo]->getAudioCodecName() << "'";
+	m_Gui.setOptions("audio codec", strTmp.str());
 	strTmp.clear();	strTmp.str("");
 	strTmp << "label='width: " << m_Players[m_iCurrentVideo]->getWidth() << "'";
 	m_Gui.setOptions("width", strTmp.str());
@@ -257,6 +265,12 @@ void cinderFFmpegApp::updateGui()
 	strTmp.clear();	strTmp.str("");
 	strTmp << "label='bitrate:  " << m_Players[m_iCurrentVideo]->getBitrate() << "'";
 	m_Gui.setOptions("bitrate", strTmp.str());
+	strTmp.clear();	strTmp.str("");
+	strTmp << "label='audio channels:  " << m_Players[m_iCurrentVideo]->getAudioChannels() << "'";
+	m_Gui.setOptions("audio channels", strTmp.str());
+	strTmp.clear();	strTmp.str("");
+	strTmp << "label='audio sample rate:  " << m_Players[m_iCurrentVideo]->getAudioSampleRate() << "'";
+	m_Gui.setOptions("audio sample rate", strTmp.str());
 	strTmp.clear();	strTmp.str("");
 	strTmp << "label='frame:  " << m_Players[m_iCurrentVideo]->getCurrentFrameNumber() << "/" << m_Players[m_iCurrentVideo]->getDurationInFrames() << "'";
 	m_Gui.setOptions("frame", strTmp.str());
@@ -279,7 +293,10 @@ void cinderFFmpegApp::setupGui()
 	m_Gui.addText("file", strTmp.str());
 	strTmp.clear();	strTmp.str("");
 	strTmp << "label='video codec: '";
-	m_Gui.addText("codec", strTmp.str());
+	m_Gui.addText("video codec", strTmp.str());
+	strTmp.clear();	strTmp.str("");
+	strTmp << "label='audio codec: '";
+	m_Gui.addText("audio codec", strTmp.str());
 	strTmp.clear();	strTmp.str("");
 	strTmp << "label='width: '";
 	m_Gui.addText("width", strTmp.str());
@@ -292,6 +309,12 @@ void cinderFFmpegApp::setupGui()
 	strTmp.clear();	strTmp.str("");
 	strTmp << "label='bitrate: '";
 	m_Gui.addText("bitrate", strTmp.str());
+	strTmp.clear();	strTmp.str("");
+	strTmp << "label='audio channels: '";
+	m_Gui.addText("audio channels", strTmp.str());
+	strTmp.clear();	strTmp.str("");
+	strTmp << "label='audio sample rate: '";
+	m_Gui.addText("audio sample rate", strTmp.str());
 	strTmp.clear();	strTmp.str("");
 	strTmp << "label='frame: '";
 	m_Gui.addText("frame", strTmp.str());
@@ -306,6 +329,16 @@ void cinderFFmpegApp::setupGui()
 	m_Gui.addParam("speed", &m_fSpeed, "min=0 max=8.0 step=0.05");
 	m_Gui.addParam("0..none, 1..loop, 2..loopBidi", &m_iLoopMode, "min=0 max=2 step=1");
 	m_Gui.addParam("seek frame", &m_fSeekPos, "min=0.0 max=1.0 step=0.01");
+}
+
+
+void cinderFFmpegApp::audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer32f *ioBuffer ) 
+{
+	for( int  i = 0; i < ioSampleCount; i++ ) 
+	{
+		ioBuffer->mData[i*ioBuffer->mNumberChannels] = 0.1;
+		ioBuffer->mData[i*ioBuffer->mNumberChannels + 1] = 0.1;
+	}
 }
 
 int	cinderFFmpegApp::calcTileDivisor(int size)

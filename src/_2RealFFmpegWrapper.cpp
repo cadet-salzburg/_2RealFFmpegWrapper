@@ -22,7 +22,6 @@
 	Authors: Robert Praxmarer
 	Web: http://www.1n0ut.com
 	Email: support@cadet.at
-	Created: 16-04-2011
 
 	This wrapper uses FFmpeg, and is licensed and credited as follows:
 
@@ -61,18 +60,17 @@ extern "C" {
 	//#include "libavutil/opt.h"
 }
 
+#define EPS 0.000025	// epsilon for checking unsual results as taken from OpenCV FFmeg player
 namespace _2RealFFmpegWrapper
 {
 
-FFmpegWrapper::FFmpegWrapper() : m_bIsFileOpen(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),
-	m_pSwScalingContext(nullptr), m_pFrame(nullptr), m_pFrameRGB(nullptr), m_pVideoBuffer(nullptr)
+FFmpegWrapper::FFmpegWrapper() : m_bIsInitialized(false)
 {
 	init();
 }
 
 
-FFmpegWrapper::FFmpegWrapper(std::string strFileName) : m_bIsFileOpen(false), m_pFormatContext(nullptr), m_pCodecContext(nullptr),
-	m_pSwScalingContext(nullptr), m_pFrame(nullptr), m_pFrameRGB(nullptr), m_pVideoBuffer(nullptr)
+FFmpegWrapper::FFmpegWrapper(std::string strFileName) : m_bIsInitialized(false) 
 {
 	init();
 	open(strFileName);
@@ -85,25 +83,49 @@ FFmpegWrapper::~FFmpegWrapper()
 
 bool FFmpegWrapper::init()
 {
-	 avcodec_register_all();	// think this line is redundant but other samples use it, so better leave it
-	 av_register_all();
-	 m_bIsThreadRunning = false;
-	 return true;
+	if(!m_bIsInitialized)
+	{
+		avformat_network_init();
+		av_register_all();
+		av_log_set_level(AV_LOG_ERROR);   
+	}
+	return true;
 }
 
-bool FFmpegWrapper::open(std::string strFileName)
+void FFmpegWrapper::initPropertyVariables()
 {
 	// init property variables
+	m_bIsFileOpen = false;
+	m_bIsThreadRunning = false; 
+	m_pFormatContext = nullptr;
+	m_pVideoCodecContext = nullptr;
+	m_pAudioCodecContext = nullptr;
+	m_pSwScalingContext = nullptr;
+	m_pVideoFrame = nullptr;
+	m_pVideoFrameRGB = nullptr;
+	m_pVideoBuffer = nullptr;
+	m_pAudioFrame = nullptr;
 	m_iWidth = m_iHeight = 0;
 	m_iLoopMode = eLoop;
 	m_dTargetTimeInMs = 0;
 	m_lCurrentFrameNumber = -1;	// set to invalid, as it is not decoded yet
 	m_dCurrentTimeInMs = -1;	// set to invalid, as it is not decoded yet
 	m_fSpeedMultiplier = 1.0;
+	m_dFps = 0;
+	m_iBitrate = 0;
+	m_lDurationInFrames = 0;
+	m_dDurationInMs = 0;
 	m_iDirection = eForward;
 	m_iState = eStopped;
-	m_strFileName = strFileName;
 	m_lFramePosInPreLoadedFile = 0;
+	m_AudioData.m_iAudioChannels = 0;
+	m_AudioData.m_iAudioSampleRate = 0;
+}
+
+bool FFmpegWrapper::open(std::string strFileName)
+{
+	initPropertyVariables();
+	m_strFileName = strFileName;
 
 	if(m_bIsFileOpen)
 	{
@@ -112,7 +134,6 @@ bool FFmpegWrapper::open(std::string strFileName)
 	}
 
 	// Open video file
-	m_pFormatContext = avformat_alloc_context();
 	if(avformat_open_input(&m_pFormatContext, strFileName.c_str(), NULL, NULL)!=0)
 	   return false; // couldn't open file
 
@@ -149,6 +170,9 @@ bool FFmpegWrapper::open(std::string strFileName)
 			return false;
 	}
 
+	// general file info equal for audio and video stream
+	retrieveFileInfo();
+
 	m_bIsFileOpen = true;
 	m_strFileName = strFileName;
 
@@ -156,7 +180,7 @@ bool FFmpegWrapper::open(std::string strFileName)
 	if(isImage())
 	{
 		m_dDurationInMs = 0;
-		m_fFps = 0;
+		m_dFps = 0;
 		m_lCurrentFrameNumber = 1;
 		decodeImage();
 	}
@@ -170,44 +194,60 @@ bool FFmpegWrapper::open(std::string strFileName)
 bool FFmpegWrapper::openVideoStream()
 {
 	// Get a pointer to the codec context for the video stream
-	m_pCodecContext = m_pFormatContext->streams[m_iVideoStream]->codec;
+	m_pVideoCodecContext = m_pFormatContext->streams[m_iVideoStream]->codec;
 
 	// Find the decoder for the video stream
-	AVCodec* pCodec = avcodec_find_decoder(m_pCodecContext->codec_id);	// guess this is deleted with the avcodec_close, that's what the docs say
+	AVCodec* pCodec = avcodec_find_decoder(m_pVideoCodecContext->codec_id);	// guess this is deleted with the avcodec_close, that's what the docs say
 	if(pCodec==NULL)
 		return false; // Codec not found
 
 	// Open codec
 	AVDictionary* options;	
-	if(avcodec_open2(m_pCodecContext, pCodec, nullptr)<0)
+	if(avcodec_open2(m_pVideoCodecContext, pCodec, nullptr)<0)
 		return false; // Could not open codec
 
 	// Allocate video frame
-	m_pFrame = avcodec_alloc_frame();
+	m_pVideoFrame = avcodec_alloc_frame();
 
 	// Allocate an AVFrame structure
-	m_pFrameRGB=avcodec_alloc_frame();
-	if(m_pFrameRGB==nullptr)
+	m_pVideoFrameRGB=avcodec_alloc_frame();
+	if(m_pVideoFrameRGB==nullptr)
 		return false;
 
 	retrieveVideoInfo();
 
 	// Determine required buffer size and allocate buffer
-	//int numBytes=avpicture_get_size(PIX_FMT_RGB24, m_iWidth, m_iHeight); // there is a bug currently in the newest ffmpeg, so let's calc size manually
-	m_pVideoBuffer=new uint8_t[m_iWidth * m_iHeight * 3];
-
+	m_pVideoBuffer=new uint8_t[ avpicture_get_size( PIX_FMT_RGB24, m_iWidth, m_iHeight)];
 
 	// Assign appropriate parts of buffer to image planes in pFrameRGB
-	avpicture_fill((AVPicture*)m_pFrameRGB, m_pVideoBuffer, PIX_FMT_RGB24,m_iWidth,m_iHeight);
-
+	avpicture_fill((AVPicture*)m_pVideoFrameRGB, m_pVideoBuffer, PIX_FMT_RGB24, m_iWidth,m_iHeight);
+	
 	//Initialize Context
-	m_pSwScalingContext = sws_getContext(m_pCodecContext->width,m_iHeight, m_pCodecContext->pix_fmt,m_iWidth,m_iHeight, PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
+	m_pSwScalingContext = sws_getContext(m_pVideoCodecContext->width,m_iHeight, m_pVideoCodecContext->pix_fmt,m_iWidth,m_iHeight, PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
 
 	return true;
 }
 
 bool FFmpegWrapper::openAudioStream()
 {
+	// Get a pointer to the codec context for the video stream
+	m_pAudioCodecContext = m_pFormatContext->streams[m_iAudioStream]->codec;
+
+	// Find the decoder for the video stream
+	AVCodec* pCodec = avcodec_find_decoder(m_pAudioCodecContext->codec_id);	// guess this is deleted with the avcodec_close, that's what the docs say
+	if(pCodec==NULL)
+		return false; // Codec not found
+
+	// Open codec
+	AVDictionary* options;	
+	if(avcodec_open2(m_pAudioCodecContext, pCodec, nullptr)<0)
+		return false; // Could not open codec
+
+	// Allocate video frame
+	m_pAudioFrame = avcodec_alloc_frame();
+
+	retrieveAudioInfo();
+
 	return true;
 }
 
@@ -222,18 +262,25 @@ void FFmpegWrapper::close()
 		m_pVideoBuffer = nullptr;
 	}
 
-	if(m_pFrameRGB!=nullptr)
+	if(m_pVideoFrameRGB!=nullptr)
 	{
-		av_free(m_pFrameRGB);
-		m_pFrameRGB = nullptr;
+		av_free(m_pVideoFrameRGB);
+		m_pVideoFrameRGB = nullptr;
 	}
 
 	// Free the YUV frame
-	if(m_pFrame!=nullptr)
+	if(m_pVideoFrame!=nullptr)
 	{
-		av_free(m_pFrame);
-		m_pFrame = nullptr;
+		av_free(m_pVideoFrame);
+		m_pVideoFrame = nullptr;
 	}
+
+	if(m_pAudioFrame!=nullptr)
+	{
+		av_free(m_pAudioFrame);
+		m_pAudioFrame = nullptr;
+	}
+
 
 	if(m_pSwScalingContext!=nullptr)
 	{
@@ -241,14 +288,19 @@ void FFmpegWrapper::close()
 		m_pSwScalingContext = nullptr;
 	}
 
-	// Close the codec
-	if(m_pCodecContext!=nullptr)
+	// Close the codecs
+	if(m_pVideoCodecContext!=nullptr)
 	{
-		avcodec_close(m_pCodecContext);
-		m_pCodecContext = nullptr;
+		avcodec_close(m_pVideoCodecContext);
+		m_pVideoCodecContext = nullptr;
+	}
+	if(m_pAudioCodecContext!=nullptr)
+	{
+		avcodec_close(m_pAudioCodecContext);
+		m_pAudioCodecContext = nullptr;
 	}
 
-	// Close the video file
+	// Close the file
 	if(m_pFormatContext!=nullptr)
 	{
 		//avformat_close_input(&m_pFormatContext);
@@ -333,9 +385,12 @@ void FFmpegWrapper::stop()
 		seekFrame(0);	// so unseekable files get reset too
 }
 
-unsigned char* FFmpegWrapper::getFrame()
+unsigned char* FFmpegWrapper::getVideoFrame()
 {
-	return m_pFrameRGB->data[0];
+	if(m_pVideoFrameRGB!=nullptr)
+		return m_pVideoFrameRGB->data[0];
+	else
+		return nullptr;
 }
 
 void FFmpegWrapper::threadedPlayer()
@@ -379,7 +434,7 @@ void FFmpegWrapper::threadedPlayer()
 				if( m_iState == ePlaying)
 				{
 					isFrameDecoded = decodeFrame();
-					m_dTargetTimeInMs = (float)(lTargetFrame) * 1.0 / m_fFps * 1000.0;
+					m_dTargetTimeInMs = (float)(lTargetFrame) * 1.0 / m_dFps * 1000.0;
 					
 				}
 			}
@@ -393,7 +448,7 @@ void FFmpegWrapper::threadedPlayer()
 
 void FFmpegWrapper::setFramePosition(long lTargetFrameNumber)
 {
-	m_dTargetTimeInMs = ((float)(lTargetFrameNumber) * 1.0 / m_fFps * 1000.0);
+	m_dTargetTimeInMs = ((float)(lTargetFrameNumber) * 1.0 / m_dFps * 1000.0);
 }
 
 void FFmpegWrapper::setTimePositionInMs(double dTargetTimeInMs)
@@ -459,14 +514,14 @@ bool FFmpegWrapper::decodeVideoFrame(AVPacket* pAVPacket)
 	int isFrameDecoded=0;
 
 	// Decode video frame
-	if(avcodec_decode_video2(m_pCodecContext, m_pFrame, &isFrameDecoded, pAVPacket)<0)
+	if(avcodec_decode_video2(m_pVideoCodecContext, m_pVideoFrame, &isFrameDecoded, pAVPacket)<0)
 		return false;
 			
 	// Did we get a video frame?
 	if(isFrameDecoded) 
 	{
 		//Convert YUV->RGB
-		sws_scale(m_pSwScalingContext, m_pFrame->data, m_pFrame->linesize, 0, m_iHeight, m_pFrameRGB->data, m_pFrameRGB->linesize);
+		sws_scale(m_pSwScalingContext, m_pVideoFrame->data, m_pVideoFrame->linesize, 0, m_iHeight, m_pVideoFrameRGB->data, m_pVideoFrameRGB->linesize);
 		return true;
 	}
 	return false;
@@ -474,6 +529,13 @@ bool FFmpegWrapper::decodeVideoFrame(AVPacket* pAVPacket)
 
 bool FFmpegWrapper::decodeAudioFrame(AVPacket* pAVPacket)
 {
+	int isFrameDecoded=0;
+
+	if(avcodec_decode_audio4(m_pAudioCodecContext, m_pAudioFrame, &isFrameDecoded, pAVPacket)<0)
+	{
+		 return false;
+	}
+	m_AudioData.m_lSize = av_samples_get_buffer_size(NULL, m_pAudioCodecContext->channels, m_pAudioFrame->nb_samples, m_pAudioCodecContext->sample_fmt, 1);	// 1 stands for don't align size
 	return true;
 }
 
@@ -494,12 +556,12 @@ bool FFmpegWrapper::decodeImage()
 	packet.size = imgFileSize;
 	av_init_packet(&packet);
 	//decode image
-	avcodec_decode_video2(m_pCodecContext, m_pFrame, &isFrameDecoded, &packet);
+	avcodec_decode_video2(m_pVideoCodecContext, m_pVideoFrame, &isFrameDecoded, &packet);
 
 	if(isFrameDecoded)	// Did we get a video frame? 
 	{
 		//Convert YUV->RGB
-		sws_scale(m_pSwScalingContext, m_pFrame->data, m_pFrame->linesize, 0,m_iHeight, m_pFrameRGB->data, m_pFrameRGB->linesize);
+		sws_scale(m_pSwScalingContext, m_pVideoFrame->data, m_pVideoFrame->linesize, 0,m_iHeight, m_pVideoFrameRGB->data, m_pVideoFrameRGB->linesize);
 		av_free_packet(&packet);
 		free(imgBuffer);			// we have to free this buffer separately don't ask me why, otherwise leak
 		return true;
@@ -518,14 +580,24 @@ bool FFmpegWrapper::seekFrame(long lTargetFrameNumber)
 	if(m_iDirection == eBackward)
 		iDirectionFlag = AVSEEK_FLAG_BACKWARD;
 	
-	if(avformat_seek_file(m_pFormatContext, m_iVideoStream, lTargetFrameNumber, lTargetFrameNumber, lTargetFrameNumber, AVSEEK_FLAG_FRAME | AVSEEK_FLAG_ANY | AVSEEK_FLAG_BACKWARD) < 0)
+	int iStream = m_iVideoStream;
+	if(iStream<0)						// we just have an audio stream so seek in this stream
+		iStream = m_iAudioStream;
+
+	if(iStream>=0)
 	{
-		avcodec_flush_buffers(m_pCodecContext);
-		return false;
-	}
-	avcodec_flush_buffers(m_pCodecContext);
+		if(avformat_seek_file(m_pFormatContext, iStream, lTargetFrameNumber, lTargetFrameNumber, lTargetFrameNumber, AVSEEK_FLAG_FRAME | AVSEEK_FLAG_ANY | AVSEEK_FLAG_BACKWARD) < 0)
+		{
+			return false;
+		}
+		if( m_pVideoCodecContext != nullptr)
+			avcodec_flush_buffers(m_pVideoCodecContext);
+		if( m_pAudioCodecContext != nullptr)
+			avcodec_flush_buffers(m_pAudioCodecContext);
 	
-	return true;
+		return true;
+	}
+	return false;
 }
 
 bool FFmpegWrapper::seekTime(double dTimeInMs)
@@ -533,14 +605,9 @@ bool FFmpegWrapper::seekTime(double dTimeInMs)
 	return seekFrame( calculateFrameNumberFromTime(dTimeInMs) );
 }
 
-unsigned char* FFmpegWrapper::getAudio()
+AudioData FFmpegWrapper::getAudioData()
 {
-	return nullptr;
-}
-	
-unsigned char* FFmpegWrapper::getAudio(int iFrame)
-{
-	return nullptr;
+	return m_AudioData;
 }
 
 void FFmpegWrapper::setLoopMode(int iLoopMode)
@@ -575,7 +642,7 @@ int FFmpegWrapper::getState()
 
 float FFmpegWrapper::getFps()
 {
-	return m_fFps;
+	return m_dFps;
 }
 
 float FFmpegWrapper::getSpeed()
@@ -618,9 +685,24 @@ void FFmpegWrapper::setDirection(int iDirection)
 	m_iDirection = iDirection;
 }
 
-std::string FFmpegWrapper::getCodecName()
+std::string FFmpegWrapper::getVideoCodecName()
 {
-	return m_strCodecName;
+	return m_strVideoCodecName;
+}
+
+std::string FFmpegWrapper::getAudioCodecName()
+{
+	return m_strAudioCodecName;
+}
+
+int FFmpegWrapper::getAudioChannels()
+{
+	return m_AudioData.m_iAudioChannels;
+}
+
+int FFmpegWrapper::getAudioSampleRate()
+{
+	return m_AudioData.m_iAudioSampleRate;
 }
 
 std::string FFmpegWrapper::getFileName()
@@ -645,23 +727,41 @@ bool FFmpegWrapper::isNewFrame()
 	return (lTargetFrame != m_lCurrentFrameNumber);
 }
 
+void FFmpegWrapper::retrieveFileInfo()
+{
+	m_iBitrate = m_pFormatContext->bit_rate / 1000.0;
+
+	int iStream = m_iVideoStream;
+	if(iStream<0)						// we just have an audio stream so seek in this stream
+		iStream = m_iAudioStream;
+
+	if(iStream>=0)
+	{
+		m_dDurationInMs = m_pFormatContext->duration * 1000.0 / (float)AV_TIME_BASE;
+		if(m_dDurationInMs/1000.0 < EPS)
+			m_dDurationInMs =  m_pFormatContext->streams[iStream]->duration * r2d( m_pFormatContext->streams[iStream]->time_base) * 1000.0;
+		m_dFps = r2d(m_pFormatContext->streams[iStream]->r_frame_rate);
+		if(m_dFps < EPS)
+			m_dFps = r2d(m_pFormatContext->streams[iStream]->avg_frame_rate);
+	
+		m_lDurationInFrames = m_pFormatContext->streams[iStream]->nb_frames;		// for some codec this return wrong numbers so calc from time
+		if(m_lDurationInFrames == 0)
+			m_lDurationInFrames = calculateFrameNumberFromTime(m_dDurationInMs);
+	}
+}
+
 void FFmpegWrapper::retrieveVideoInfo()
 {
-	m_iWidth = m_pCodecContext->width;
-	m_iHeight = m_pCodecContext->height;
-	m_iBitrate = m_pFormatContext->bit_rate / 1000.0;
-	m_dDurationInMs = m_pFormatContext->duration * 1000.0 / (float)AV_TIME_BASE;
-	m_fFps = (float)m_pCodecContext->time_base.den * (1.0 / (float)m_pCodecContext->time_base.num);
-	if(m_fFps>100)
-		m_fFps = 1.0 /((m_dDurationInMs / (float)m_lDurationInFrames) / 1000.0);
-	
-	//m_lDurationInFrames = m_pFormatContext->streams[m_iVideoStream]->nb_frames;		// for some codec this return wrong numbers so calc from time
-	m_lDurationInFrames = calculateFrameNumberFromTime(m_dDurationInMs);
-	
-	//if(m_pFormatContext->streams[m_iVideoStream]->nb_frames == 0)	// couldn't retrieve it from metainfo so calc from time duration
-	//	m_lDurationInFrames = (float)m_dDurationInMs / 1000.0 / (1.0 / m_fFps); 
+	m_strVideoCodecName = std::string(m_pVideoCodecContext->codec->long_name);
+	m_iWidth = m_pVideoCodecContext->width;
+	m_iHeight = m_pVideoCodecContext->height;
+}
 
-	m_strCodecName = std::string(m_pCodecContext->codec->long_name);
+void FFmpegWrapper::retrieveAudioInfo()
+{
+	m_strAudioCodecName = std::string(m_pAudioCodecContext->codec->long_name);
+	m_AudioData.m_iAudioSampleRate = m_pAudioCodecContext->sample_rate;
+	m_AudioData.m_iAudioChannels = m_pAudioCodecContext->channels;
 }
 
 void FFmpegWrapper::dumpFFmpegInfo()
@@ -684,8 +784,7 @@ double FFmpegWrapper::getDeltaTime()
 
 long FFmpegWrapper::calculateFrameNumberFromTime(long lTime)
 {
-	//long lTargetFrame = av_rescale(lTime,m_pFormatContext->streams[m_iVideoStream]->time_base.den,m_pFormatContext->streams[m_iVideoStream]->time_base.num) / 1000.0;
-	long lTargetFrame = floor((double)lTime/1000.0 * m_fFps);
+	long lTargetFrame = floor((double)lTime/1000.0 * m_dFps + 0.5);	//the 0.5 is taken from the opencv player, this might be useful for floating point rounding problems to be on the safe side not to miss one frame
 	return lTargetFrame;
 }
 
@@ -697,7 +796,13 @@ double FFmpegWrapper::mod(double a, double b)
 
 bool FFmpegWrapper::isImage()
 {
-	return m_iBitrate<=0;
+	return m_iBitrate<=0 && m_AudioData.m_iAudioSampleRate<=0;
+}
+
+// helper function as taken from OpenCV ffmpeg reader
+double FFmpegWrapper::r2d(AVRational r)
+{
+    return r.num == 0 || r.den == 0 ? 0. : (double)r.num / (double)r.den;
 }
 
 };
