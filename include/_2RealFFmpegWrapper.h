@@ -70,7 +70,9 @@ namespace _2RealFFmpegWrapper
 	{
 		int						m_iAudioSampleRate;
 		int						m_iAudioChannels;
-		long					m_lSize;
+		long					m_lSizeInBytes;
+		long					m_lPts;
+		long					m_lDts;
 		unsigned char*			m_pData;
 	} AudioData;
 

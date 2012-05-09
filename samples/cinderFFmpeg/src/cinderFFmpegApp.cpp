@@ -59,7 +59,7 @@ private:
 	void toggleDirection();
 	int	 calcTileDivisor(int size);
 	int  calcSelectedPlayer(int x, int y);
-	void audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer32f *ioBuffer );
+	void audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer16i *ioBuffer );
 
 	std::vector<std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> >		m_Players;
 	std::vector<ci::gl::Texture>											m_VideoTextures;
@@ -96,7 +96,7 @@ void cinderFFmpegApp::setup()
 	std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> testFile = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
 	testFile->dumpFFmpegInfo();
 	//if(testFile->open(".\\data\\morph.avi"))
-	if(testFile->open("d:\\vjing\\houska\\sounds\\tada.wav"))
+	if(testFile->open("d:\\vjing\\final4hallein.avi"))
 	{
 		m_Players.push_back(testFile);
 		m_VideoTextures.push_back(gl::Texture());
@@ -110,7 +110,8 @@ void cinderFFmpegApp::setup()
 	m_iTilesDivisor = 1;
 	m_fSeekPos = m_fOldSeekPos = 0;
 
-	audio::Output::play( audio::createCallback( this, &cinderFFmpegApp::audioCallback ) );
+	std::shared_ptr<audio::Callback<cinderFFmpegApp,short>> audioCallback = audio::createCallback( this, &cinderFFmpegApp::audioCallback );
+	audio::Output::play( audioCallback );
 }
 
 void cinderFFmpegApp::update()
@@ -332,13 +333,30 @@ void cinderFFmpegApp::setupGui()
 }
 
 
-void cinderFFmpegApp::audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer32f *ioBuffer ) 
+void cinderFFmpegApp::audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer16i *ioBuffer ) 
 {
+	int lSize = m_Players[m_iCurrentVideo]->getAudioData().m_lSizeInBytes;
+	static short buffer[4096];
+	
+	long lPts = m_Players[m_iCurrentVideo]->getAudioData().m_lPts;
+	int part = (lPts/1024) % 2;
+	memcpy(&buffer[part*2048], m_Players[m_iCurrentVideo]->getAudioData().m_pData, lSize);
+
+	if( part == 0)
+		return;
+
+	memcpy(ioBuffer->mData, buffer, 4096*sizeof(short));
+
+	/*int j=0;
 	for( int  i = 0; i < ioSampleCount; i++ ) 
 	{
-		ioBuffer->mData[i*ioBuffer->mNumberChannels] = 0.1;
-		ioBuffer->mData[i*ioBuffer->mNumberChannels + 1] = 0.1;
-	}
+		short val = *(reinterpret_cast<short*>(&m_Players[m_iCurrentVideo]->getAudioData().m_pData[j]));
+		short val1 = *(reinterpret_cast<short*>(&m_Players[m_iCurrentVideo]->getAudioData().m_pData[j+2]));
+
+		ioBuffer->mData[i*ioBuffer->mNumberChannels] = val;
+		ioBuffer->mData[i*ioBuffer->mNumberChannels + 1] = val1;
+		j+=2;
+	}*/
 }
 
 int	cinderFFmpegApp::calcTileDivisor(int size)

@@ -120,6 +120,8 @@ void FFmpegWrapper::initPropertyVariables()
 	m_lFramePosInPreLoadedFile = 0;
 	m_AudioData.m_iAudioChannels = 0;
 	m_AudioData.m_iAudioSampleRate = 0;
+	m_AudioData.m_lSizeInBytes = 0;
+	m_AudioData.m_pData = nullptr;
 }
 
 bool FFmpegWrapper::open(std::string strFileName)
@@ -414,7 +416,7 @@ void FFmpegWrapper::threadedPlayer()
 			
 			if(bIsSeekable)
 			{
-				bIsSeekable = seekFrame(lTargetFrame);
+				//bIsSeekable = seekFrame(lTargetFrame);
 				isFrameDecoded = decodeFrame();
 				if(!isFrameDecoded)
 				{
@@ -487,7 +489,7 @@ bool FFmpegWrapper::decodeFrame()
 	for(int i=0; i<m_pFormatContext->nb_streams; i++)
 	{
 		AVPacket* pAVPacket = fetchAVPacket();
-
+		
 		if(pAVPacket!=nullptr)
 		{
 			// Is this a packet from the video stream?
@@ -535,7 +537,14 @@ bool FFmpegWrapper::decodeAudioFrame(AVPacket* pAVPacket)
 	{
 		 return false;
 	}
-	m_AudioData.m_lSize = av_samples_get_buffer_size(NULL, m_pAudioCodecContext->channels, m_pAudioFrame->nb_samples, m_pAudioCodecContext->sample_fmt, 1);	// 1 stands for don't align size
+	m_AudioData.m_pData = m_pAudioFrame->data[0];
+	m_AudioData.m_lSizeInBytes = av_samples_get_buffer_size(NULL, m_pAudioCodecContext->channels, m_pAudioFrame->nb_samples, m_pAudioCodecContext->sample_fmt, 1);	// 1 stands for don't align size
+	m_AudioData.m_lPts = m_pAudioFrame->pkt_pts;
+	m_AudioData.m_lDts = m_pAudioFrame->pkt_dts;
+	if(m_AudioData.m_lPts == AV_NOPTS_VALUE)
+		m_AudioData.m_lPts = 0;
+	if(m_AudioData.m_lDts == AV_NOPTS_VALUE)
+		m_AudioData.m_lDts = 0;
 	return true;
 }
 
