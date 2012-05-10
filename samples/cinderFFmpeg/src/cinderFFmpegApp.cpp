@@ -59,7 +59,7 @@ private:
 	void toggleDirection();
 	int	 calcTileDivisor(int size);
 	int  calcSelectedPlayer(int x, int y);
-	void audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer16i *ioBuffer );
+	void audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer16u *ioBuffer );
 
 	std::vector<std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> >		m_Players;
 	std::vector<ci::gl::Texture>											m_VideoTextures;
@@ -110,7 +110,7 @@ void cinderFFmpegApp::setup()
 	m_iTilesDivisor = 1;
 	m_fSeekPos = m_fOldSeekPos = 0;
 
-	std::shared_ptr<audio::Callback<cinderFFmpegApp,short>> audioCallback = audio::createCallback( this, &cinderFFmpegApp::audioCallback );
+	std::shared_ptr<audio::Callback<cinderFFmpegApp,unsigned short>> audioCallback = audio::createCallback( this, &cinderFFmpegApp::audioCallback );
 	audio::Output::play( audioCallback );
 }
 
@@ -150,7 +150,8 @@ void cinderFFmpegApp::draw()
 	{
 		if(m_Players[i]->hasVideo()) //&& m_Players[i]->isNewFrame())
 		{	
-			unsigned char* pImg = m_Players[i]->getVideoFrame();
+		//	m_Players[i]->update();
+			unsigned char* pImg = m_Players[i]->getVideoData().m_pData;
 			if(pImg != nullptr)
 			{		
 				m_VideoTextures[i] = gl::Texture(ci::Surface(pImg, m_Players[i]->getWidth(), m_Players[i]->getHeight(), m_Players[i]->getWidth() * 3, ci::SurfaceChannelOrder::RGB) );
@@ -333,30 +334,34 @@ void cinderFFmpegApp::setupGui()
 }
 
 
-void cinderFFmpegApp::audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer16i *ioBuffer ) 
+void cinderFFmpegApp::audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer16u *ioBuffer ) 
 {
-	int lSize = m_Players[m_iCurrentVideo]->getAudioData().m_lSizeInBytes;
+	_2RealFFmpegWrapper::AudioData audioData = m_Players[m_iCurrentVideo]->getAudioData();
+	unsigned char* data = audioData.m_pData;
+	
+
+	/*int lSize = audioData.m_lSizeInBytes;
 	static short buffer[4096];
 	
-	long lPts = m_Players[m_iCurrentVideo]->getAudioData().m_lPts;
+	long lPts = audioData.m_lPts;
 	int part = (lPts/1024) % 2;
-	memcpy(&buffer[part*2048], m_Players[m_iCurrentVideo]->getAudioData().m_pData, lSize);
+	memcpy(&buffer[part*2048], data, lSize);
 
 	if( part == 0)
 		return;
 
-	memcpy(ioBuffer->mData, buffer, 4096*sizeof(short));
+	memcpy(ioBuffer->mData, buffer, 4096*sizeof(short));*/
 
-	/*int j=0;
+	int j=0;
 	for( int  i = 0; i < ioSampleCount; i++ ) 
 	{
-		short val = *(reinterpret_cast<short*>(&m_Players[m_iCurrentVideo]->getAudioData().m_pData[j]));
-		short val1 = *(reinterpret_cast<short*>(&m_Players[m_iCurrentVideo]->getAudioData().m_pData[j+2]));
+		short val = *(reinterpret_cast<unsigned short*>(&data[j]));
+		//short val1 = *(reinterpret_cast<short*>(&m_Players[m_iCurrentVideo]->getAudioData().m_pData[j+2]));
 
 		ioBuffer->mData[i*ioBuffer->mNumberChannels] = val;
-		ioBuffer->mData[i*ioBuffer->mNumberChannels + 1] = val1;
+		ioBuffer->mData[i*ioBuffer->mNumberChannels + 1] = val;
 		j+=2;
-	}*/
+	}
 }
 
 int	cinderFFmpegApp::calcTileDivisor(int size)

@@ -68,13 +68,30 @@ namespace _2RealFFmpegWrapper
 
 	typedef struct AudioData
 	{
-		int						m_iAudioSampleRate;
-		int						m_iAudioChannels;
+		int						m_iSampleRate;
+		int						m_iChannels;
+		int						m_iSamplesCount;
 		long					m_lSizeInBytes;
 		long					m_lPts;
 		long					m_lDts;
 		unsigned char*			m_pData;
 	} AudioData;
+
+	typedef struct VideoData
+	{
+		int						m_iWidth;
+		int						m_iHeight;
+		int						m_iChannels;
+		long					m_lPts;
+		long					m_lDts;
+		unsigned char*			m_pData;
+	} VideoData;
+
+	typedef struct AVData
+	{
+		VideoData				m_VideoData;
+		AudioData				m_AudioData;
+	} AVData;
 
 	class FFmpegWrapper
 	{
@@ -89,9 +106,10 @@ namespace _2RealFFmpegWrapper
 		void play();
 		void stop();
 		void pause();
-
-		unsigned char*	getVideoFrame();
-		AudioData		getAudioData();
+		void update();
+		AVData&			getAVData();
+		VideoData&		getVideoData();
+		AudioData&		getAudioData();
 		void			setFramePosition(long lTargetFrameNumber);
 		void			setTimePositionInMs(double dTargetTimeInMs);
 		void		    setPosition(float fPos);	// between 0 .. 1 for begin and end of stream
@@ -125,7 +143,6 @@ namespace _2RealFFmpegWrapper
 		void			initPropertyVariables();
 		bool			openVideoStream();
 		bool			openAudioStream();
-		void			threadedPlayer();
 		bool			seekFrame(long lFrameNumber);
 		bool			seekTime(double dTimeInMs);
 		bool			decodeFrame();
@@ -136,7 +153,7 @@ namespace _2RealFFmpegWrapper
 		void			retrieveFileInfo();
 		void			retrieveVideoInfo();
 		void			retrieveAudioInfo();
-		void			update();
+		void			updateTimer();
 		double			getDeltaTime();
 		long			calculateFrameNumberFromTime(long lTime);
 		double			mod(double a, double b);
@@ -149,9 +166,8 @@ namespace _2RealFFmpegWrapper
 		AVFrame*				m_pVideoFrame;
 		AVFrame*				m_pVideoFrameRGB;
 		AVFrame*				m_pAudioFrame;
-		AudioData				m_AudioData;
+		AVData					m_AVData;
 
-		std::vector<AVPacket*>	m_vFileBuffer;		// stores all frames of a file
 		std::string				m_strFileName;	
 		std::string				m_strVideoCodecName;
 		std::string				m_strAudioCodecName;
@@ -169,8 +185,6 @@ namespace _2RealFFmpegWrapper
 		int						m_iVideoStream;
 		int						m_iAudioStream;
 		int						m_iContentType;				// 0 .. video with audio, 1 .. just video, 2 .. just audio, 3 .. image	// 2RealEnumeration
-		int						m_iWidth;
-		int						m_iHeight;
 		int						m_iBitrate;
 		int						m_iDirection;
 		int						m_iLoopMode;					// 0 .. once, 1 .. loop normal, 2 .. loop bidirectional, default is loop

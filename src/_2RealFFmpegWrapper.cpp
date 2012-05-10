@@ -56,7 +56,6 @@ extern "C" {
 	#include "libavutil/avutil.h"
 	#include "libswscale/swscale.h"
 	#include "libavutil/rational.h"
-
 	//#include "libavutil/opt.h"
 }
 
@@ -105,7 +104,7 @@ void FFmpegWrapper::initPropertyVariables()
 	m_pVideoFrameRGB = nullptr;
 	m_pVideoBuffer = nullptr;
 	m_pAudioFrame = nullptr;
-	m_iWidth = m_iHeight = 0;
+	
 	m_iLoopMode = eLoop;
 	m_dTargetTimeInMs = 0;
 	m_lCurrentFrameNumber = -1;	// set to invalid, as it is not decoded yet
@@ -118,10 +117,20 @@ void FFmpegWrapper::initPropertyVariables()
 	m_iDirection = eForward;
 	m_iState = eStopped;
 	m_lFramePosInPreLoadedFile = 0;
-	m_AudioData.m_iAudioChannels = 0;
-	m_AudioData.m_iAudioSampleRate = 0;
-	m_AudioData.m_lSizeInBytes = 0;
-	m_AudioData.m_pData = nullptr;
+
+	m_AVData.m_VideoData.m_iWidth = 0;
+	m_AVData.m_VideoData.m_iHeight = 0;
+	m_AVData.m_VideoData.m_pData = nullptr;
+	m_AVData.m_VideoData.m_lPts = 0;
+	m_AVData.m_VideoData.m_lDts = 0;
+	m_AVData.m_VideoData.m_iChannels = 0;
+
+	m_AVData.m_AudioData.m_iChannels = 0;
+	m_AVData.m_AudioData.m_iSampleRate = 0;
+	m_AVData.m_AudioData.m_lSizeInBytes = 0;
+	m_AVData.m_AudioData.m_lPts = 0;
+	m_AVData.m_AudioData.m_lDts = 0;
+	m_AVData.m_AudioData.m_pData = nullptr;
 }
 
 bool FFmpegWrapper::open(std::string strFileName)
@@ -178,7 +187,7 @@ bool FFmpegWrapper::open(std::string strFileName)
 	m_bIsFileOpen = true;
 	m_strFileName = strFileName;
 
-	// content is image, just decode once don't start update thread
+	// content is image, just decode once 
 	if(isImage())
 	{
 		m_dDurationInMs = 0;
@@ -219,13 +228,13 @@ bool FFmpegWrapper::openVideoStream()
 	retrieveVideoInfo();
 
 	// Determine required buffer size and allocate buffer
-	m_pVideoBuffer=new uint8_t[ avpicture_get_size( PIX_FMT_RGB24, m_iWidth, m_iHeight)];
+	m_pVideoBuffer=new uint8_t[ avpicture_get_size( PIX_FMT_RGB24, getWidth(), getHeight())];
 
 	// Assign appropriate parts of buffer to image planes in pFrameRGB
-	avpicture_fill((AVPicture*)m_pVideoFrameRGB, m_pVideoBuffer, PIX_FMT_RGB24, m_iWidth,m_iHeight);
-	
+	avpicture_fill((AVPicture*)m_pVideoFrameRGB, m_pVideoBuffer, PIX_FMT_RGB24, getWidth(), getHeight());
+	 
 	//Initialize Context
-	m_pSwScalingContext = sws_getContext(m_pVideoCodecContext->width,m_iHeight, m_pVideoCodecContext->pix_fmt,m_iWidth,m_iHeight, PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
+	m_pSwScalingContext = sws_getContext(getWidth(), getHeight(), m_pVideoCodecContext->pix_fmt, getWidth(), getHeight(), PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL);
 
 	return true;
 }
@@ -311,7 +320,7 @@ void FFmpegWrapper::close()
 	}
 }
 
-void FFmpegWrapper::update()
+void FFmpegWrapper::updateTimer()
 {
 	// todo check for very big over and underflow
 	double deltaTime = getDeltaTime();
@@ -355,16 +364,70 @@ void FFmpegWrapper::update()
 	}
 }
 
+void FFmpegWrapper::update()
+{
+	boost::mutex::scoped_lock scopedLock(m_Mutex);
+
+	isFrameDecoded = false;
+	static bool bIsSeekable = true;
+
+	if(isImage())	// no update needed for already decoded image
+		return;
+	
+	// update timer for correct video sync to fps
+	updateTimer();
+
+	// make sure always to decode 0 frame first, even if the first delta time would suggest differently
+	if(m_dCurrentTimeInMs<0)
+		m_dTargetTimeInMs = 0;
+
+	long lTargetFrame = calculateFrameNumberFromTime(m_dTargetTimeInMs);
+	if(lTargetFrame != m_lCurrentFrameNumber)
+	{
+		// probe to jump to target frame directly
+			
+		if(bIsSeekable)
+		{
+			//bIsSeekable = seekFrame(lTargetFrame);
+			isFrameDecoded = decodeFrame();
+			if(!isFrameDecoded)
+			{
+			/*	seekFrame(0);
+				bIsSeekable = false;*/
+			}
+		}
+			
+		if(!bIsSeekable)	// just forward decoding, this is a huge performance issue when playing backwards
+		{
+			/*if(lTargetFrame<=0)
+			{
+				seekFrame(0);
+				m_lCurrentFrameNumber = m_dCurrentTimeInMs = 0;
+			}*/
+
+			if( m_iState == ePlaying)
+			{
+				isFrameDecoded = decodeFrame();
+				m_dTargetTimeInMs = (float)(lTargetFrame) * 1.0 / m_dFps * 1000.0;
+					
+			}
+		}
+
+		m_lCurrentFrameNumber = lTargetFrame;
+		m_dCurrentTimeInMs = m_dTargetTimeInMs;
+	}
+}
+
 void FFmpegWrapper::play()
 {
 	if(!isImage())
 	{
 		m_iState = ePlaying;
-		if(!m_bIsThreadRunning)
+	/*	if(!m_bIsThreadRunning)
 		{
 			m_bIsThreadRunning = true;
 			m_PlayerThread = boost::thread(&FFmpegWrapper::threadedPlayer, this);
-		}
+		}*/
 	}
 }
 
@@ -375,11 +438,11 @@ void FFmpegWrapper::pause()
 
 void FFmpegWrapper::stop()
 {
-	if(m_bIsThreadRunning)
-	{
-		m_bIsThreadRunning = false;
-		m_PlayerThread.join();
-	}
+	//if(m_bIsThreadRunning)
+	//{
+	//	m_bIsThreadRunning = false;
+	//	m_PlayerThread.join();
+	//}
 	m_lCurrentFrameNumber = -1;	// set to invalid, as it is not decoded yet
 	m_dTargetTimeInMs = 0;
 	m_iState = eStopped;
@@ -387,65 +450,22 @@ void FFmpegWrapper::stop()
 		seekFrame(0);	// so unseekable files get reset too
 }
 
-unsigned char* FFmpegWrapper::getVideoFrame()
+AVData& FFmpegWrapper::getAVData()
 {
-	if(m_pVideoFrameRGB!=nullptr)
-		return m_pVideoFrameRGB->data[0];
-	else
-		return nullptr;
+	update();
+	return m_AVData;
 }
 
-void FFmpegWrapper::threadedPlayer()
+VideoData& FFmpegWrapper::getVideoData()
 {
-	isFrameDecoded = false;
-	static bool bIsSeekable = true;
+	update();
+	return m_AVData.m_VideoData;
+}
 
-	while(m_bIsThreadRunning)
-	{
-		// update timer for correct video sync to fps
-		update();
-
-		// make sure always to decode 0 frame first, even if the first delta time would suggest differently
-		if(m_dCurrentTimeInMs<0)
-			m_dTargetTimeInMs = 0;
-
-		long lTargetFrame = calculateFrameNumberFromTime(m_dTargetTimeInMs);
-		if(lTargetFrame != m_lCurrentFrameNumber)
-		{
-			// probe to jump to target frame directly
-			
-			if(bIsSeekable)
-			{
-				//bIsSeekable = seekFrame(lTargetFrame);
-				isFrameDecoded = decodeFrame();
-				if(!isFrameDecoded)
-				{
-				/*	seekFrame(0);
-					bIsSeekable = false;*/
-				}
-			}
-			
-			if(!bIsSeekable)	// just forward decoding, this is a huge performance issue when playing backwards
-			{
-				/*if(lTargetFrame<=0)
-				{
-					seekFrame(0);
-					m_lCurrentFrameNumber = m_dCurrentTimeInMs = 0;
-				}*/
-
-				if( m_iState == ePlaying)
-				{
-					isFrameDecoded = decodeFrame();
-					m_dTargetTimeInMs = (float)(lTargetFrame) * 1.0 / m_dFps * 1000.0;
-					
-				}
-			}
-
-			m_lCurrentFrameNumber = lTargetFrame;
-			m_dCurrentTimeInMs = m_dTargetTimeInMs;
-		}
-		
-	}
+AudioData& FFmpegWrapper::getAudioData()
+{
+	update();
+	return m_AVData.m_AudioData;
 }
 
 void FFmpegWrapper::setFramePosition(long lTargetFrameNumber)
@@ -523,7 +543,8 @@ bool FFmpegWrapper::decodeVideoFrame(AVPacket* pAVPacket)
 	if(isFrameDecoded) 
 	{
 		//Convert YUV->RGB
-		sws_scale(m_pSwScalingContext, m_pVideoFrame->data, m_pVideoFrame->linesize, 0, m_iHeight, m_pVideoFrameRGB->data, m_pVideoFrameRGB->linesize);
+		sws_scale(m_pSwScalingContext, m_pVideoFrame->data, m_pVideoFrame->linesize, 0, getHeight(), m_pVideoFrameRGB->data, m_pVideoFrameRGB->linesize);
+		m_AVData.m_VideoData.m_pData =  m_pVideoFrameRGB->data[0];
 		return true;
 	}
 	return false;
@@ -535,16 +556,17 @@ bool FFmpegWrapper::decodeAudioFrame(AVPacket* pAVPacket)
 
 	if(avcodec_decode_audio4(m_pAudioCodecContext, m_pAudioFrame, &isFrameDecoded, pAVPacket)<0)
 	{
-		 return false;
+		m_AVData.m_AudioData.m_pData = nullptr;
+		return false;
 	}
-	m_AudioData.m_pData = m_pAudioFrame->data[0];
-	m_AudioData.m_lSizeInBytes = av_samples_get_buffer_size(NULL, m_pAudioCodecContext->channels, m_pAudioFrame->nb_samples, m_pAudioCodecContext->sample_fmt, 1);	// 1 stands for don't align size
-	m_AudioData.m_lPts = m_pAudioFrame->pkt_pts;
-	m_AudioData.m_lDts = m_pAudioFrame->pkt_dts;
-	if(m_AudioData.m_lPts == AV_NOPTS_VALUE)
-		m_AudioData.m_lPts = 0;
-	if(m_AudioData.m_lDts == AV_NOPTS_VALUE)
-		m_AudioData.m_lDts = 0;
+	m_AVData.m_AudioData.m_pData = m_pAudioFrame->data[0];
+	m_AVData.m_AudioData.m_lSizeInBytes = av_samples_get_buffer_size(NULL, m_pAudioCodecContext->channels, m_pAudioFrame->nb_samples, m_pAudioCodecContext->sample_fmt, 1);	// 1 stands for don't align size
+	m_AVData.m_AudioData.m_lPts = m_pAudioFrame->pkt_pts;
+	m_AVData.m_AudioData.m_lDts = m_pAudioFrame->pkt_dts;
+	if(m_AVData.m_AudioData.m_lPts == AV_NOPTS_VALUE)
+		m_AVData.m_AudioData.m_lPts = 0;
+	if(m_AVData.m_AudioData.m_lDts == AV_NOPTS_VALUE)
+		m_AVData.m_AudioData.m_lDts = 0;
 	return true;
 }
 
@@ -570,7 +592,7 @@ bool FFmpegWrapper::decodeImage()
 	if(isFrameDecoded)	// Did we get a video frame? 
 	{
 		//Convert YUV->RGB
-		sws_scale(m_pSwScalingContext, m_pVideoFrame->data, m_pVideoFrame->linesize, 0,m_iHeight, m_pVideoFrameRGB->data, m_pVideoFrameRGB->linesize);
+		sws_scale(m_pSwScalingContext, m_pVideoFrame->data, m_pVideoFrame->linesize, 0,getHeight(), m_pVideoFrameRGB->data, m_pVideoFrameRGB->linesize);
 		av_free_packet(&packet);
 		free(imgBuffer);			// we have to free this buffer separately don't ask me why, otherwise leak
 		return true;
@@ -614,11 +636,6 @@ bool FFmpegWrapper::seekTime(double dTimeInMs)
 	return seekFrame( calculateFrameNumberFromTime(dTimeInMs) );
 }
 
-AudioData FFmpegWrapper::getAudioData()
-{
-	return m_AudioData;
-}
-
 void FFmpegWrapper::setLoopMode(int iLoopMode)
 {
 	m_iLoopMode = iLoopMode;
@@ -636,12 +653,12 @@ void FFmpegWrapper::setSpeed(float fSpeed)
 
 unsigned int FFmpegWrapper::getWidth()
 {
-	return m_iWidth;
+	return m_AVData.m_VideoData.m_iWidth;
 }
 		
 unsigned int FFmpegWrapper::getHeight()
 {
-	return m_iHeight;
+	return m_AVData.m_VideoData.m_iHeight;
 }
 
 int FFmpegWrapper::getState()
@@ -706,12 +723,12 @@ std::string FFmpegWrapper::getAudioCodecName()
 
 int FFmpegWrapper::getAudioChannels()
 {
-	return m_AudioData.m_iAudioChannels;
+	return m_AVData.m_AudioData.m_iChannels;
 }
 
 int FFmpegWrapper::getAudioSampleRate()
 {
-	return m_AudioData.m_iAudioSampleRate;
+	return m_AVData.m_AudioData.m_iSampleRate;
 }
 
 std::string FFmpegWrapper::getFileName()
@@ -762,15 +779,15 @@ void FFmpegWrapper::retrieveFileInfo()
 void FFmpegWrapper::retrieveVideoInfo()
 {
 	m_strVideoCodecName = std::string(m_pVideoCodecContext->codec->long_name);
-	m_iWidth = m_pVideoCodecContext->width;
-	m_iHeight = m_pVideoCodecContext->height;
+	m_AVData.m_VideoData.m_iWidth = m_pVideoCodecContext->width;
+	m_AVData.m_VideoData.m_iHeight = m_pVideoCodecContext->height;
 }
 
 void FFmpegWrapper::retrieveAudioInfo()
 {
 	m_strAudioCodecName = std::string(m_pAudioCodecContext->codec->long_name);
-	m_AudioData.m_iAudioSampleRate = m_pAudioCodecContext->sample_rate;
-	m_AudioData.m_iAudioChannels = m_pAudioCodecContext->channels;
+	m_AVData.m_AudioData.m_iSampleRate = m_pAudioCodecContext->sample_rate;
+	m_AVData.m_AudioData.m_iChannels = m_pAudioCodecContext->channels;
 }
 
 void FFmpegWrapper::dumpFFmpegInfo()
@@ -793,7 +810,7 @@ double FFmpegWrapper::getDeltaTime()
 
 long FFmpegWrapper::calculateFrameNumberFromTime(long lTime)
 {
-	long lTargetFrame = floor((double)lTime/1000.0 * m_dFps + 0.5);	//the 0.5 is taken from the opencv player, this might be useful for floating point rounding problems to be on the safe side not to miss one frame
+	long lTargetFrame = floor((double)lTime/1000.0 * m_dFps );	//the 0.5 is taken from the opencv player, this might be useful for floating point rounding problems to be on the safe side not to miss one frame
 	return lTargetFrame;
 }
 
@@ -805,7 +822,7 @@ double FFmpegWrapper::mod(double a, double b)
 
 bool FFmpegWrapper::isImage()
 {
-	return m_iBitrate<=0 && m_AudioData.m_iAudioSampleRate<=0;
+	return m_iBitrate<=0 && m_AVData.m_AudioData.m_iSampleRate<=0;
 }
 
 // helper function as taken from OpenCV ffmpeg reader
