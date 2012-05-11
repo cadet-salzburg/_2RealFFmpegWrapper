@@ -366,8 +366,6 @@ void FFmpegWrapper::updateTimer()
 
 void FFmpegWrapper::update()
 {
-	boost::mutex::scoped_lock scopedLock(m_Mutex);
-
 	isFrameDecoded = false;
 	static bool bIsSeekable = true;
 
@@ -458,12 +456,16 @@ AVData& FFmpegWrapper::getAVData()
 
 VideoData& FFmpegWrapper::getVideoData()
 {
+	boost::mutex::scoped_lock scopedLock(m_Mutex);
+
 	update();
 	return m_AVData.m_VideoData;
 }
 
 AudioData& FFmpegWrapper::getAudioData()
 {
+	boost::mutex::scoped_lock scopedLock(m_Mutex);
+
 	update();
 	return m_AVData.m_AudioData;
 }
@@ -545,6 +547,15 @@ bool FFmpegWrapper::decodeVideoFrame(AVPacket* pAVPacket)
 		//Convert YUV->RGB
 		sws_scale(m_pSwScalingContext, m_pVideoFrame->data, m_pVideoFrame->linesize, 0, getHeight(), m_pVideoFrameRGB->data, m_pVideoFrameRGB->linesize);
 		m_AVData.m_VideoData.m_pData =  m_pVideoFrameRGB->data[0];
+		m_AVData.m_VideoData.m_lPts = m_pVideoFrame->pkt_pts;
+		m_AVData.m_VideoData.m_lDts = m_pVideoFrame->pkt_dts;
+		if(m_AVData.m_VideoData.m_lPts == AV_NOPTS_VALUE)
+			m_AVData.m_VideoData.m_lPts = 0;
+		if(m_AVData.m_VideoData.m_lDts == AV_NOPTS_VALUE)
+			m_AVData.m_VideoData.m_lDts = 0;
+
+		printf("video frame %d\n", m_AVData.m_VideoData.m_lPts);
+
 		return true;
 	}
 	return false;
@@ -567,6 +578,8 @@ bool FFmpegWrapper::decodeAudioFrame(AVPacket* pAVPacket)
 		m_AVData.m_AudioData.m_lPts = 0;
 	if(m_AVData.m_AudioData.m_lDts == AV_NOPTS_VALUE)
 		m_AVData.m_AudioData.m_lDts = 0;
+
+	printf("audio frame %d\n", m_AVData.m_AudioData.m_lPts);
 	return true;
 }
 

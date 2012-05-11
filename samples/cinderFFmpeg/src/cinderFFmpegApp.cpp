@@ -26,6 +26,7 @@
 	This sample uses LibCinder and _2RealFFmpegWwrapper, and of course FFmpeg
 */
 
+
 #include "_2RealFFmpegWrapper.h"
 
 // cinder
@@ -36,12 +37,19 @@
 #include "cinder/params/Params.h"
 #include "cinder/Utilities.h"
 
+#include "fmod.hpp"
+
 using namespace ci;
 using namespace ci::app;
 
 class cinderFFmpegApp : public AppBasic 
 {
 public:
+	cinderFFmpegApp::cinderFFmpegApp()
+	{
+		m_Instance = this;
+	};
+
 	void prepareSettings(Settings* settings);
 	void setup();
 	void update();
@@ -60,7 +68,10 @@ private:
 	int	 calcTileDivisor(int size);
 	int  calcSelectedPlayer(int x, int y);
 	void audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer16u *ioBuffer );
+	
+	static FMOD_RESULT F_CALLBACK pcmreadcallback(FMOD_SOUND *sound, void *data, unsigned int datalen);
 
+	static	cinderFFmpegApp*												m_Instance;
 	std::vector<std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> >		m_Players;
 	std::vector<ci::gl::Texture>											m_VideoTextures;
 	ci::params::InterfaceGl													m_Gui;
@@ -74,7 +85,16 @@ private:
 	int																		m_iTilesDivisor;
 	int																		m_iTileWidth;
 	int																		m_iTileHeight;
+
+	//fmod
+	FMOD::System           *m_pSystem;
+    FMOD::Sound            *m_pSound;
+    FMOD::Channel          *m_pChannel;
+    FMOD_RESULT             result;
+    FMOD_CREATESOUNDEXINFO  createsoundexinfo;
 };
+
+cinderFFmpegApp* cinderFFmpegApp::m_Instance;
 
 void cinderFFmpegApp::prepareSettings(Settings* settings)
 {							
@@ -110,8 +130,24 @@ void cinderFFmpegApp::setup()
 	m_iTilesDivisor = 1;
 	m_fSeekPos = m_fOldSeekPos = 0;
 
-	std::shared_ptr<audio::Callback<cinderFFmpegApp,unsigned short>> audioCallback = audio::createCallback( this, &cinderFFmpegApp::audioCallback );
-	audio::Output::play( audioCallback );
+	//setup fmod
+	FMOD::System_Create(&m_pSystem);
+    m_pSystem->init(32, FMOD_INIT_NORMAL, 0);
+   
+	memset(&createsoundexinfo, 0, sizeof(FMOD_CREATESOUNDEXINFO));
+    createsoundexinfo.cbsize            = sizeof(FMOD_CREATESOUNDEXINFO);              /* required. */
+    createsoundexinfo.decodebuffersize  = 1024;                                       /* Chunk size of stream update in samples.  This will be the amount of data passed to the user callback. */
+    createsoundexinfo.numchannels       = 2;                        /* Number of channels in the sound. */
+    createsoundexinfo.length            = -1;                     /* Length of PCM data in bytes of whole song.  -1 = infinite. */
+    createsoundexinfo.defaultfrequency  = (int)44100;                       /* Default playback rate of sound. */
+	createsoundexinfo.format            = FMOD_SOUND_FORMAT_PCM16;                    /* Data format of sound. */
+	createsoundexinfo.pcmreadcallback   =  pcmreadcallback;                             /* User callback for reading. */
+
+	result = m_pSystem->createStream(0, FMOD_2D | FMOD_OPENUSER | FMOD_LOOP_OFF, &createsoundexinfo, &m_pSound);
+	result = m_pSystem->playSound(FMOD_CHANNEL_FREE, m_pSound, 0, &m_pChannel);
+
+	//std::shared_ptr<audio::Callback<cinderFFmpegApp,unsigned short>> audioCallback = audio::createCallback( this, &cinderFFmpegApp::audioCallback );
+	//audio::Output::play( audioCallback );
 }
 
 void cinderFFmpegApp::update()
@@ -145,7 +181,7 @@ void cinderFFmpegApp::draw()
 	int posY;
 
 	gl::clear();
-
+	
 	for(int i=0; i<m_Players.size(); i++)
 	{
 		if(m_Players[i]->hasVideo()) //&& m_Players[i]->isNewFrame())
@@ -334,6 +370,20 @@ void cinderFFmpegApp::setupGui()
 }
 
 
+FMOD_RESULT F_CALLBACK cinderFFmpegApp::pcmreadcallback(FMOD_SOUND *sound, void *data, unsigned int datalen)
+{
+  static long oldDts=-1;
+
+  _2RealFFmpegWrapper::AudioData audioData = m_Instance->m_Players[m_Instance->m_iCurrentVideo]->getAudioData();
+ 
+	
+	int len = 2048*sizeof(short);
+	memcpy(data, audioData.m_pData, datalen);
+  
+	oldDts = audioData.m_lDts;
+    return FMOD_OK;
+}
+
 void cinderFFmpegApp::audioCallback( uint64_t inSampleOffset, uint32_t ioSampleCount, audio::Buffer16u *ioBuffer ) 
 {
 	_2RealFFmpegWrapper::AudioData audioData = m_Players[m_iCurrentVideo]->getAudioData();
@@ -402,5 +452,6 @@ int	cinderFFmpegApp::calcTileDivisor(int size)
 		}
 	}
  }
+
 
 CINDER_APP_BASIC( cinderFFmpegApp, RendererGl )
