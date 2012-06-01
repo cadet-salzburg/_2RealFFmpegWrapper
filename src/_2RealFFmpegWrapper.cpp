@@ -320,6 +320,60 @@ void FFmpegWrapper::close()
 	}
 }
 
+void FFmpegWrapper::play()
+{
+	if(!isImage())
+	{
+		m_iState = ePlaying;
+	/*	if(!m_bIsThreadRunning)
+		{
+			m_bIsThreadRunning = true;
+			m_PlayerThread = boost::thread(&FFmpegWrapper::threadedPlayer, this);
+		}*/
+	}
+}
+
+void FFmpegWrapper::pause()
+{
+	m_iState = ePaused;
+}
+
+void FFmpegWrapper::stop()
+{
+	//if(m_bIsThreadRunning)
+	//{
+	//	m_bIsThreadRunning = false;
+	//	m_PlayerThread.join();
+	//}
+	m_lCurrentFrameNumber = -1;	// set to invalid, as it is not decoded yet
+	m_dTargetTimeInMs = 0;
+	m_iState = eStopped;
+	if(m_bIsFileOpen)
+		seekFrame(0);	// so unseekable files get reset too
+}
+
+AVData& FFmpegWrapper::getAVData()
+{
+	update();
+	return m_AVData;
+}
+
+VideoData& FFmpegWrapper::getVideoData()
+{
+	boost::mutex::scoped_lock scopedLock(m_Mutex);
+
+	//update();
+	return m_AVData.m_VideoData;
+}
+
+AudioData& FFmpegWrapper::getAudioData()
+{
+	boost::mutex::scoped_lock scopedLock(m_Mutex);
+
+	update();
+	return m_AVData.m_AudioData;
+}
+
 void FFmpegWrapper::updateTimer()
 {
 	// todo check for very big over and underflow
@@ -373,20 +427,20 @@ void FFmpegWrapper::update()
 		return;
 	
 	// update timer for correct video sync to fps
-	updateTimer();
+	//updateTimer();
 
 	// make sure always to decode 0 frame first, even if the first delta time would suggest differently
 	if(m_dCurrentTimeInMs<0)
 		m_dTargetTimeInMs = 0;
 
-	long lTargetFrame = calculateFrameNumberFromTime(m_dTargetTimeInMs);
-	if(lTargetFrame != m_lCurrentFrameNumber)
+	long lTargetFrame = m_lCurrentFrameNumber;//calculateFrameNumberFromTime(m_dTargetTimeInMs);
+	//if(lTargetFrame != m_lCurrentFrameNumber)
 	{
 		// probe to jump to target frame directly
 			
 		if(bIsSeekable)
 		{
-			//bIsSeekable = seekFrame(lTargetFrame);
+			bIsSeekable = seekFrame(lTargetFrame);
 			isFrameDecoded = decodeFrame();
 			if(!isFrameDecoded)
 			{
@@ -411,87 +465,11 @@ void FFmpegWrapper::update()
 			}
 		}
 
-		m_lCurrentFrameNumber = lTargetFrame;
+		m_lCurrentFrameNumber++;// = lTargetFrame;
 		m_dCurrentTimeInMs = m_dTargetTimeInMs;
 	}
 }
 
-void FFmpegWrapper::play()
-{
-	if(!isImage())
-	{
-		m_iState = ePlaying;
-	/*	if(!m_bIsThreadRunning)
-		{
-			m_bIsThreadRunning = true;
-			m_PlayerThread = boost::thread(&FFmpegWrapper::threadedPlayer, this);
-		}*/
-	}
-}
-
-void FFmpegWrapper::pause()
-{
-	m_iState = ePaused;
-}
-
-void FFmpegWrapper::stop()
-{
-	//if(m_bIsThreadRunning)
-	//{
-	//	m_bIsThreadRunning = false;
-	//	m_PlayerThread.join();
-	//}
-	m_lCurrentFrameNumber = -1;	// set to invalid, as it is not decoded yet
-	m_dTargetTimeInMs = 0;
-	m_iState = eStopped;
-	if(m_bIsFileOpen)
-		seekFrame(0);	// so unseekable files get reset too
-}
-
-AVData& FFmpegWrapper::getAVData()
-{
-	update();
-	return m_AVData;
-}
-
-VideoData& FFmpegWrapper::getVideoData()
-{
-	boost::mutex::scoped_lock scopedLock(m_Mutex);
-
-	update();
-	return m_AVData.m_VideoData;
-}
-
-AudioData& FFmpegWrapper::getAudioData()
-{
-	boost::mutex::scoped_lock scopedLock(m_Mutex);
-
-	update();
-	return m_AVData.m_AudioData;
-}
-
-void FFmpegWrapper::setFramePosition(long lTargetFrameNumber)
-{
-	m_dTargetTimeInMs = ((float)(lTargetFrameNumber) * 1.0 / m_dFps * 1000.0);
-}
-
-void FFmpegWrapper::setTimePositionInMs(double dTargetTimeInMs)
-{
-	m_dTargetTimeInMs = dTargetTimeInMs;
-}
-
-void FFmpegWrapper::setPosition(float fPos)
-{
-	if(fPos<0.0)
-	{
-		fPos=0.0;
-	}
-	else if(fPos>1.0)
-	{
-		fPos=1.0;
-	}
-	m_dTargetTimeInMs = (fPos * m_dDurationInMs);
-}
 
 AVPacket* FFmpegWrapper::fetchAVPacket()
 {
@@ -517,10 +495,12 @@ bool FFmpegWrapper::decodeFrame()
 			// Is this a packet from the video stream?
 			if(pAVPacket->stream_index == m_iVideoStream) 
 			{
+				bRet = false;
 				bRet = decodeVideoFrame(pAVPacket);
 			}
 			else if(pAVPacket->stream_index == m_iAudioStream)
 			{
+				bRet = false;
 				bRet = decodeAudioFrame(pAVPacket);
 			}
     
@@ -528,9 +508,14 @@ bool FFmpegWrapper::decodeFrame()
 
 			if(!bRet)
 				return false;
+
+			
 		}
 	}
-	return true;
+	
+	if(!bRet)
+		printf("ficke");
+	return bRet;
 }
 
 bool FFmpegWrapper::decodeVideoFrame(AVPacket* pAVPacket)
@@ -605,7 +590,7 @@ bool FFmpegWrapper::decodeImage()
 	if(isFrameDecoded)	// Did we get a video frame? 
 	{
 		//Convert YUV->RGB
-		sws_scale(m_pSwScalingContext, m_pVideoFrame->data, m_pVideoFrame->linesize, 0,getHeight(), m_pVideoFrameRGB->data, m_pVideoFrameRGB->linesize);
+		sws_scale(m_pSwScalingContext, m_pVideoFrame->data, m_pVideoFrame->linesize, 0, getHeight(), m_pVideoFrameRGB->data, m_pVideoFrameRGB->linesize);
 		av_free_packet(&packet);
 		free(imgBuffer);			// we have to free this buffer separately don't ask me why, otherwise leak
 		return true;
@@ -646,7 +631,53 @@ bool FFmpegWrapper::seekFrame(long lTargetFrameNumber)
 
 bool FFmpegWrapper::seekTime(double dTimeInMs)
 {
-	return seekFrame( calculateFrameNumberFromTime(dTimeInMs) );
+	int iDirectionFlag = 0;
+	if(m_iDirection == eBackward)
+		iDirectionFlag = AVSEEK_FLAG_BACKWARD;
+	
+	int iStream = m_iVideoStream;
+	if(iStream<0)						// we just have an audio stream so seek in this stream
+		iStream = m_iAudioStream;
+
+	if(iStream>=0)
+	{
+		if(avformat_seek_file(m_pFormatContext, -1, dTimeInMs*1000-2, dTimeInMs*1000, dTimeInMs*1000+2, AVSEEK_FLAG_ANY | iDirectionFlag) < 0)
+		{
+			return false;
+		}
+		if( m_pVideoCodecContext != nullptr)
+			avcodec_flush_buffers(m_pVideoCodecContext);
+		if( m_pAudioCodecContext != nullptr)
+			avcodec_flush_buffers(m_pAudioCodecContext);
+	
+		return true;
+	}
+	return false;
+	//return seekFrame( calculateFrameNumberFromTime(dTimeInMs) );
+}
+
+
+void FFmpegWrapper::setFramePosition(long lTargetFrameNumber)
+{
+	m_dTargetTimeInMs = ((float)(lTargetFrameNumber) * 1.0 / m_dFps * 1000.0);
+}
+
+void FFmpegWrapper::setTimePositionInMs(double dTargetTimeInMs)
+{
+	m_dTargetTimeInMs = dTargetTimeInMs;
+}
+
+void FFmpegWrapper::setPosition(float fPos)
+{
+	if(fPos<0.0)
+	{
+		fPos=0.0;
+	}
+	else if(fPos>1.0)
+	{
+		fPos=1.0;
+	}
+	m_dTargetTimeInMs = (fPos * m_dDurationInMs);
 }
 
 void FFmpegWrapper::setLoopMode(int iLoopMode)

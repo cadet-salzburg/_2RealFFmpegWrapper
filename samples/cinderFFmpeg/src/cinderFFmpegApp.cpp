@@ -116,7 +116,7 @@ void cinderFFmpegApp::setup()
 	std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper> testFile = std::shared_ptr<_2RealFFmpegWrapper::FFmpegWrapper>(new _2RealFFmpegWrapper::FFmpegWrapper());
 	testFile->dumpFFmpegInfo();
 	//if(testFile->open(".\\data\\morph.avi"))
-	if(testFile->open("d:\\vjing\\final4hallein.avi"))
+	if(testFile->open("d:\\vjing\\Wildlife.wmv"))
 	{
 		m_Players.push_back(testFile);
 		m_VideoTextures.push_back(gl::Texture());
@@ -378,7 +378,8 @@ FMOD_RESULT F_CALLBACK cinderFFmpegApp::pcmreadcallback(FMOD_SOUND *sound, void 
  
 	
 	int len = 2048*sizeof(short);
-	memcpy(data, audioData.m_pData, datalen);
+	if(audioData.m_pData!=nullptr)
+		memcpy(data, audioData.m_pData, len);
   
 	oldDts = audioData.m_lDts;
     return FMOD_OK;
